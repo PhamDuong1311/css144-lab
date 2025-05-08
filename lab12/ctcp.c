@@ -116,9 +116,6 @@ void ctcp_read(ctcp_state_t *state) {
   if (state->unacked != NULL)
     return; // Chưa được ACK, chờ
 
-    fprintf(stderr, "Received segment with seqno=%u, expected ackno=%u\n", 
-      segment->seqno, state->ackno);
-
   char buf[MAX_SEG_DATA_SIZE];
   int len = conn_input(state->conn, buf, MAX_SEG_DATA_SIZE);
 
@@ -154,6 +151,10 @@ void ctcp_read(ctcp_state_t *state) {
   conn_send(state->conn, seg, seg->len);
   state->unacked = seg;
   state->last_send_time = current_time();
+
+
+  fprintf(stderr, "Received segment with seqno=%u, expected ackno=%u\n", 
+    segment->seqno, state->ackno);
 }
 
 void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
