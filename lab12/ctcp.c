@@ -154,7 +154,7 @@ void ctcp_read(ctcp_state_t *state) {
 
 
   fprintf(stderr, "Received segment with seqno=%u, expected ackno=%u\n", 
-    segment->seqno, state->ackno);
+    seg->seqno, state->ackno);
 }
 
 void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
