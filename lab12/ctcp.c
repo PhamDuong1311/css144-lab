@@ -83,7 +83,7 @@
   void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *seg);
   void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *seg);
  
-
+  int is_correct_cksum(ctcp_segment_t *seg);
 
  ctcp_state_t *ctcp_init(conn_t *conn, ctcp_config_t *cfg) {
    if (conn == NULL) {
@@ -210,76 +210,20 @@
 
 
  void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
-   // Convert fields to host order
-   uint32_t seqno = ntohl(segment->seqno);
-   uint32_t ackno = ntohl(segment->ackno);
+   // Convert field to host order
    uint32_t flags = ntohl(segment->flags);
-   uint16_t seg_len = ntohs(segment->len);
-   
-   // Validate checksum
-   uint16_t recv_cksum = segment->cksum;
-   segment->cksum = 0;
-   uint16_t calc_cksum = cksum(segment, seg_len);
-   if (recv_cksum != calc_cksum) {
+
+   if (!is_correct_cksum(segment)) {
      free(segment);
-     return;  // Bad checksum, discard
+     return;
    }
-   
-   // Handle ACKs
    if (flags & ACK) {
-     if (state->unacked_seg && ackno >= state->expected_ackno) {
-       // Our data was ACKed
-       free(state->unacked_seg);
-       state->unacked_seg = NULL;
-       state->expected_ackno = ackno;
-       
-       if (state->sent_fin && ackno == state->next_seqno) {
-         state->output_eof = true;
-         if (can_destroy(state)) {
-           ctcp_destroy(state);
-           return;
-         }
-       }
-     }
+     ack_seg_handle(state, segment);
+   } else if (flags & FIN) {
+     fin_seg_handle(state, segment);
+   } else if (flags == 0) {
+     data_seg_handle(state, segment);
    }
-   
-   // Handle data or FIN
-   if (seg_len > sizeof(ctcp_segment_t) || (flags & FIN)) {
-     if (flags & FIN) {
-       state->recv_fin = true;
-       state->expected_seqno++;
-       
-       // Send ACK for FIN
-       ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
-       send_segment(state, ack, sizeof(ctcp_segment_t));
-       
-       // Output EOF
-       if (conn_output(state->conn, NULL, 0) == -1) {
-         state->output_eof = true;
-         if (can_destroy(state)) {
-           ctcp_destroy(state);
-           return;
-         }
-       }
-     } else if (seqno == state->expected_seqno) {
-       // Handle in-order data
-       uint16_t data_len = seg_len - sizeof(ctcp_segment_t);
-       
-       // Add to receive buffer
-       if (state->byte_recv + data_len > MAX_SEG_DATA_SIZE) {
-         // Resize buffer if needed
-       }
-       memcpy(state->recv_buffer + state->byte_recv, segment->data, data_len);
-       state->byte_recv += data_len;
-       state->expected_seqno += data_len;
-       
-       // Send ACK
-       ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
-       send_segment(state, ack, sizeof(ctcp_segment_t));
-     }
-   }
-   
-   free(segment);
  }
  
  void ctcp_output(ctcp_state_t *state) {
@@ -391,17 +335,17 @@
             state->xmit_count ++;
           }
         }
-      } else if (state->status == FIN_WAIT_1) {
+      } else if (state->status == FIN_WAIT_1) { // Đợi ACK cho FIN thứ 1 vừa gửi
         if (state->expected_ackno ==  ntohl(seg->ackno)) {
           state->status = FIN_WAIT_2;
         }
-      } else if (state->status == LAST_ACK) {
+      } else if (state->status == LAST_ACK) { // Đợi ACK cho FIN thứ 2 vừa gửi
         if (state->expected_ackno ==  ntohl(seg->ackno)) {
           ctcp_destroy(state);
         }
-      } else if (state->status == CLOSING) {
+      } else if (state->status == CLOSING) { // Đợi ACK cho cả 2 FIN gửi đồng thời
         state->status = TIME_WAIT;
-      } else if (state->status == WAIT_SEND_FIN) {
+      } else if (state->status == WAIT_SEND_FIN) { // Đợi nốt các ACK còn lại cho DATA trước khi FIN
         ctcp_segment_t *segment = create_segment(state, FIN, NULL, 0);
         send_segment(state, segment, segment->len);
       }
@@ -409,9 +353,49 @@
   }
 
   void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *seg) {
+    uint32_t seq_num = ntohl(seg->seqno);
+    uint32_t seg_len = ntohl(seg->len);
+    uint32_t data_len = sizeof(ctcp_segment_t) - seg_len;
+
+    if (state->recv_window < data_len) {
+      printf("Overload recv_window");
+    } else {
+      state->next_ackno = seq_num + data_len;
+      ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
+      send_segment(state, ack, sizeof(ctcp_segment_t));
+    }
+
 
   }
 
   void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *seg) {
-    
+    state->next_ackno++;
+    ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
+    send_segment(state, ack, sizeof(ctcp_segment_t));
+
+    if (state->status & FIN_WAIT_2) {
+      state->status = TIME_WAIT;
+      printf("state changed from FIN_WAIT_2 to TIME_WAIT\n");
+      
+      ctcp_destroy(state);
+    } else if ((FIN_WAIT_1 | WAIT_SEND_FIN | WAIT_INPUT) & state->status) {
+     if (FIN_WAIT_1 == state->status) {
+       printf("state changed from FIN_WAIT_1 to CLOSING \n");
+       state->status = CLOSING;
+     } else if (WAIT_INPUT == state->status) {
+       printf("state changed to CLOSE_WAIT\n");
+       state->status = CLOSE_WAIT;
+     } else /* if status is WAIT_SEND_FIN, received FIN = destroy connection */
+       ctcp_destroy(state);
+    }
+  }
+
+  int is_correct_cksum(ctcp_segment_t *seg) {
+   uint16_t recv_cksum = seg->cksum;
+   seg->cksum = 0;
+   uint16_t calc_cksum = cksum(seg, ntohl(seg->len));
+   if (recv_cksum == calc_cksum) {
+     return 1;
+   }
+   return 0;
   }
