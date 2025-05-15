@@ -70,6 +70,11 @@
  /* Linked list of connection states */
  static ctcp_state_t *state_list = NULL;
  
+ /* Helper function */
+  static ctcp_segment_t* create_segment(ctcp_state_t *state, uint32_t flags, char *data, size_t len_data);
+  static void send_segment(ctcp_state_t *state, ctcp_segment_t *seg, size_t len);
+  static bool can_destroy(ctcp_state_t *state);
+
  /* Helper function to create a new segment */
  static ctcp_segment_t* create_segment(ctcp_state_t *state, uint32_t flags, char *data, size_t len_data) {
    size_t seg_len = sizeof(ctcp_segment_t) + len_data;
