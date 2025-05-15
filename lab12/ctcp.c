@@ -246,12 +246,12 @@
       
       state->status = BLOCK_FOR_ACK;
       
-  } else if (bytes_read == -1) {
+  } else if (bytes_read < 0) {
       // Đã đến EOF input
       state->input_eof = true;
       
       // Đóng kết nối có 2 status sẽ gửi FIN
-      if ((state->recv_fin == true) && (state->status & CLOSE_WAIT)) {
+      if (state->status & CLOSE_WAIT) {
         // Gửi FIN số 2 trong connection
         ctcp_segment_t *fin_seg = create_segment(state, FIN, NULL, 0);
         send_segment(state, fin_seg, sizeof(ctcp_segment_t));
@@ -260,7 +260,7 @@
         // Nếu có segment chưa được ACK, chờ trước khi gửi FIN
         if (state->unacked_seg != NULL) {
             state->status = WAIT_SEND_FIN;
-            ctcp_segment_t *ack_seg = create_segment(state, ACK, NULL, 0);
+            ctcp_segment_t *ack_seg = create_segment(state, FIN, NULL, 0);
             send_segment(state, ack_seg, sizeof(ctcp_segment_t));
         } else {
             // Gửi FIN số 1 trong connection
