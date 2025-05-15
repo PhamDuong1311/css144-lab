@@ -70,11 +70,6 @@
  /* Linked list of connection states */
  static ctcp_state_t *state_list = NULL;
  
- /* Helper function */
-  static ctcp_segment_t* create_segment(ctcp_state_t *state, uint32_t flags, char *data, size_t len_data);
-  static void send_segment(ctcp_state_t *state, ctcp_segment_t *seg, size_t len);
-  static bool can_destroy(ctcp_state_t *state);
-
  /* Helper function to create a new segment */
  static ctcp_segment_t* create_segment(ctcp_state_t *state, uint32_t flags, char *data, size_t len_data) {
    size_t seg_len = sizeof(ctcp_segment_t) + len_data;
@@ -156,7 +151,8 @@
       } else if (state->status == CLOSING) {
         state->status = TIME_WAIT;
       } else if (state->status == WAIT_SEND_FIN) {
-        send_segment(state, create_segment(state, FIN, NULL, 0))
+        ctcp_segment_t *segment = create_segment(state, FIN, NULL, 0);
+        send_segment(state, segment, segment->len);
       }
     }
   }
@@ -222,8 +218,8 @@
      free(state->unacked_seg);
    }
    
-   ll_node_t *node;
-   while ((node = ll_front(state->segments)) {
+   ll_node_t *node = NULL;
+   while (node == ll_front(state->segments)) {
      ctcp_segment_t *seg = ll_remove(state->segments, node);
      free(seg);
    }
@@ -326,8 +322,7 @@
        state->expected_seqno++;
        
        // Send ACK for FIN
-       ctcp_segment_t *ack = create_segment(state, state->next_seqno, 
-                                          state->expected_seqno, ACK, NULL, 0);
+       ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
        send_segment(state, ack, sizeof(ctcp_segment_t));
        
        // Output EOF
@@ -353,8 +348,7 @@
        state->expected_seqno += data_len;
        
        // Send ACK
-       ctcp_segment_t *ack = create_segment(state, state->next_seqno, 
-                                          state->expected_seqno, ACK, NULL, 0);
+       ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
        send_segment(state, ack, sizeof(ctcp_segment_t));
      }
    }
@@ -397,25 +391,5 @@
  }
  
  void ctcp_timer() {
-   ctcp_state_t *state = state_list;
-   while (state != NULL) {
-     ctcp_state_t *next = state->next;
-     
-     if (state->unacked_seg) {
-       long now = current_time();
-       if (now - state->last_sent_time >= state->conn->cfg->rt_timeout) {
-         if (state->xmit_count >= MAX_NUM_XMITS) {
-           // Too many retransmissions, destroy connection
-           ctcp_destroy(state);
-         } else {
-           // Retransmit
-           conn_send(state->conn, state->unacked_seg, state->unacked_len);
-           state->last_sent_time = now;
-           state->xmit_count++;
-         }
-       }
-     }
-     
-     state = next;
-   }
+
  }
