@@ -44,8 +44,8 @@
    /* Additional fields for stop-and-wait */
    uint32_t next_seqno;      /* Next sequence number to use */
    uint32_t next_ackno;
+   uint32_t expected_seqno;
    uint32_t expected_ackno;  /* Expected acknowledgment number */
-   uint32_t expected_seqno;  /* Expected sequence number from peer */
    
    ctcp_segment_t *unacked_seg; /* Currently unacknowledged segment */
    int unacked_len;          /* Length of unacknowledged segment (data + header)*/
@@ -56,6 +56,11 @@
    char *recv_buffer;        /* Buffer for received data */
    size_t recv_buf_len;      /* Length of data in receive buffer */
    size_t recv_buf_size;     /* Size of receive buffer */
+
+   int byte_sent;
+   int byte_recv;
+   char buf_sent[MAX_SEG_DATA_SIZE];
+
    
    bool sent_fin;            /* Whether FIN has been sent */
    bool recv_fin;            /* Whether FIN has been received */
@@ -230,6 +235,7 @@
    free(state);
  }
  
+ /*
  void ctcp_read(ctcp_state_t *state) {
   // Nếu đang ở status chờ nhận segment thì cho alex luôn
   if (state->status & (BLOCK_FOR_ACK | WAIT_SEND_FIN | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | CLOSING)) {
@@ -281,6 +287,73 @@
   }
 }
  
+*/
+
+ void ctcp_read(ctcp_state_t *state)
+ {
+   /* FIXME */
+   if (NULL == state)
+     return;
+ 
+   if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | WAIT_SEND_FIN) & state->status)
+   {
+     //printf("can't read input from stdin status: %x\n", state->status);
+     return;
+   }
+   int bytes_left = state->sent_window - state->byte_sent;
+   if (0 >= bytes_left)
+   {
+     state->status = BLOCK_FOR_ACK;
+     return;
+   }
+     
+   int max_byte = bytes_left < MAX_SEG_DATA_SIZE ? bytes_left : MAX_SEG_DATA_SIZE;
+   int byte_read = 0;
+     
+   /* read input locally to be put into segments */
+   byte_read = conn_input(state->conn, state->buf_sent, max_byte);
+   {
+     if (0 > byte_read) /* error or EOF */
+     {
+       if (CLOSE_WAIT == state->status)
+       {
+         state->status = LAST_ACK;
+         ctcp_segment_t *data0 = create_segment(state, FIN, NULL, 0);
+         send_segment(state, data0, data0->len);
+         state->byte_sent++; /* treat fin as 1 byte data segment */
+         return;
+       }
+ 
+       if (0 == ll_length(state->segments))
+       {
+         //printf("state change to FIN_WAIT_1\n");
+         state->status = FIN_WAIT_1;
+         ctcp_segment_t *data1 = create_segment(state, FIN, NULL, 0);
+         send_segment(state, data1, data1->len);
+         state->byte_sent++; /* treat fin as 1 byte data segment */
+         return;
+       }
+       else
+       {
+         //printf("state changed to WAIT_SEND_FIN: sent_segments not null\n");
+         state->status = WAIT_SEND_FIN;
+         ctcp_segment_t *data2 = create_segment(state, FIN, NULL, 0);
+         send_segment(state, data2, data2->len);
+         state->byte_sent++; /* treat fin as 1 byte data segment */
+         return;
+       }
+     }
+     else if (0 < byte_read)/* data read */
+     {
+         ctcp_segment_t *data3 = create_segment(state, 0, state->buf_sent, byte_read);
+         send_segment(state, data3, byte_read + sizeof(ctcp_segment_t));
+       state->byte_sent += byte_read;
+     }
+     memset(state->buf_sent, 0, MAX_SEG_DATA_SIZE);
+   }
+ }
+
+
  void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
    // Convert fields to host order
    uint32_t seqno = ntohl(segment->seqno);
