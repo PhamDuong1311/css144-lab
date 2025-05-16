@@ -16,16 +16,16 @@
  #include "ctcp_sys.h"
  #include "ctcp_utils.h"
  
- /* define status in TCP, slide cs144 */
- #define WAIT_INPUT      0x001
- #define BLOCK_FOR_ACK	0x002
- #define FIN_WAIT_1      0x004
- #define FIN_WAIT_2      0x008
- #define TIME_WAIT       0x010
- #define CLOSE_WAIT      0x020
- #define LAST_ACK        0x040
- #define CLOSING         0x080
- #define WAIT_SEND_FIN	0x100
+  /* define status in TCP, slide cs144 */
+  #define WAIT_INPUT      0x001 // Send DATA segment => BLOCK_FOR_ACK
+  #define BLOCK_FOR_ACK	  0x002 // Receive ACK segment => WAIT_INPUT 
+  #define FIN_WAIT_1      0x004 // Receive ACK segment => FIN_WAIT_2
+  #define FIN_WAIT_2      0x008 // Receive FIN segment => TIME_WAIT
+  #define TIME_WAIT       0x010 // timeout => CLOSED
+  #define CLOSE_WAIT      0x020 // Send FIN segment => LAST_ACK
+  #define LAST_ACK        0x040 // Receive ACK segment => CLOSED
+  #define CLOSING         0x080 // Receive ACK segment => TIME_WAIT
+  #define WAIT_SEND_FIN	  0x100 // Receive ACK segment and send FIN segment => FIN_WAIT_1
  
  
  /**
@@ -55,10 +55,10 @@
    uint32_t seqno; /* sequence number */
    uint32_t ackno; /* acknowledgement number */
    uint16_t status; /* status when connect */
-   int byte_sent; /* number bytes sent */
+   int byte_sent; /* Số byte đã gửi đi cho host khác chưa ACK */
    int byte_recv;
-   char buf_sent[MAX_SEG_DATA_SIZE];
-   uint16_t recv_window; /* receive window size */
+   char buf_sent[MAX_SEG_DATA_SIZE]; // Buffer để lưu trữ dữ liệu input
+   uint16_t recv_window; /* receive window size  (MAX_SEG_DATA_SIZE) */
    uint16_t sent_window;
    int rt_timeout; /* retransmission timeout,in ms */
    struct timeval start_send_time;
@@ -125,7 +125,7 @@
    state->seqno = 1;
    state->ackno = 1;
    state->status = WAIT_INPUT;
-   state->byte_sent = 0;
+   state->byte_sent = 0; 
    state->byte_recv = 0;
    memset(state->buf_sent, 0, MAX_SEG_DATA_SIZE);
    state->recv_window = cfg->recv_window;
@@ -408,24 +408,18 @@
  }
  
  /* function handle ACK segment received in different cases */
- void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
- {
-   if (NULL == state || NULL == segment)
-     return;
-     
-   /* find unack segment in linked-list to free */
+ void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
+   // Kiểm tra state, segment nhận được, unACK segment của state tồn tại
+   if (!state || !segment || !state->sent_segments->head) return;
    ll_node_t *browse_node = state->sent_segments->head;
-   if (NULL == browse_node)
-     return;
-   ctcp_segment_t *browse_seg = (ctcp_segment_t *)(browse_node->object);
-   uint16_t seg_data_len = ntohs(browse_seg->len) - sizeof(ctcp_segment_t);
+
+   ctcp_segment_t *browse_seg = (ctcp_segment_t *)(browse_node->object); // segment chưa ACK
+   uint16_t seg_data_len = ntohs(browse_seg->len) - sizeof(ctcp_segment_t); // Kích thước data của segment chưa ACK (bỏ đi phần header)
      
-   if (TH_FIN & browse_seg->flags)
-     seg_data_len = 1;
+   if (browse_seg->flags & TH_FIN) seg_data_len = 1; 
      
    /* ackno mean need to resend ll_front in window */
-   if (ntohl(segment->ackno) == ntohl(browse_seg->seqno))
-   {
+   if (browse_seg->seqno == segment->ackno) {
      conn_send(state->conn, browse_seg, ntohs(browse_seg->len));
      return;
    }
