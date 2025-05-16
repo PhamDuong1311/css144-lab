@@ -219,11 +219,15 @@
    }
    if (flags & ACK) {
      ack_seg_handle(state, segment);
+     if (ntohl(segment->len) > sizeof(ctcp_segment_t)) {
+     data_seg_handle(state, segment);
+   }
    } else if (flags & FIN) {
      fin_seg_handle(state, segment);
    } else if (flags == 0) {
      data_seg_handle(state, segment);
    }
+   free(segment);
  }
  
  void ctcp_output(ctcp_state_t *state) {
@@ -358,7 +362,7 @@
     uint32_t data_len = sizeof(ctcp_segment_t) - seg_len;
 
     if (state->recv_window < data_len) {
-      printf("Overload recv_window");
+      return;
     } else {
       state->next_ackno = seq_num + data_len;
       ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
@@ -375,15 +379,12 @@
 
     if (state->status & FIN_WAIT_2) {
       state->status = TIME_WAIT;
-      printf("state changed from FIN_WAIT_2 to TIME_WAIT\n");
       
       ctcp_destroy(state);
     } else if ((FIN_WAIT_1 | WAIT_SEND_FIN | WAIT_INPUT) & state->status) {
      if (FIN_WAIT_1 == state->status) {
-       printf("state changed from FIN_WAIT_1 to CLOSING \n");
        state->status = CLOSING;
      } else if (WAIT_INPUT == state->status) {
-       printf("state changed to CLOSE_WAIT\n");
        state->status = CLOSE_WAIT;
      } else /* if status is WAIT_SEND_FIN, received FIN = destroy connection */
        ctcp_destroy(state);
