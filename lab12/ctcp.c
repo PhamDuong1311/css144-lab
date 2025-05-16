@@ -39,18 +39,15 @@
    struct ctcp_state **prev; /* Prev in linked list */
  
    conn_t *conn;             /* Connection object */
-   linked_list_t *segments;  /* Linked list of segments sent to this connection */
- 
-   /* Additional fields for stop-and-wait */
-   uint32_t next_seqno;      /* Next sequence number to use */
-   uint32_t next_ackno;
-   uint32_t expected_seqno;
-   uint32_t expected_ackno;  /* Expected acknowledgment number */
-   
-   ctcp_segment_t *unacked_seg; /* Currently unacknowledged segment */
-   int unacked_len;          /* Length of unacknowledged segment (data + header)*/
+   linked_list_t *sent_segments;  /* Linked list of segments sent to this connection */
+   linked_list_t *recv_segments;
    long last_sent_time;      /* Time when unacked segment was last sent */
    int xmit_count;           /* Number of times segment has been transmitted */
+   int rt_timeout;
+
+   uint32_t next_seqno;      /* Next sequence number to use */
+   uint32_t next_ackno;
+   uint32_t expected_ackno;  /* Expected acknowledgment number */
    
    // Buffer received from other host before push to output (not received from input)
    char recv_buffer[MAX_SEG_DATA_SIZE];        /* Buffer for received data */
@@ -101,12 +98,8 @@
    state->next_seqno = 1;  
    state->next_ackno = 1;
    state->expected_ackno = 1;
-   state->expected_seqno = 1;
    state->status = WAIT_INPUT;
 
-
-   state->unacked_seg = NULL;
-   state->unacked_len = 0;
    state->last_sent_time = 0;
    state->xmit_count = 0;
    
@@ -117,8 +110,10 @@
 
    state->sent_window = cfg->send_window;
    state->recv_window = cfg->recv_window;
+   state->rt_timeout = cfg->rt_timeout;
 
-  state->segments = ll_create();
+  state->sent_segments = ll_create();
+  state->recv_segments = ll_create();
 
   state->sent_fin = false;        
   state->recv_fin = false;            
@@ -212,7 +207,7 @@
  void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
    // Convert field to host order
    uint32_t flags = ntohl(segment->flags);
-
+   fprintf(stderr, "[DEBUG] Received segment with flags: 0x%X\n", flags);
    if (!is_correct_cksum(segment)) {
      free(segment);
      return;
@@ -279,15 +274,17 @@
    seg->len = htons(seg_len);
    seg->flags = htonl(flags);
    seg->window = htons(state->sent_window);
+   seg->cksum = 0;
    
+   // Khi tạo segment để gửi đi thì chỉ có FIN, DATA segment được lưu vào LL để chờ ACK segment
    if (len_data > 0) {
     memcpy(seg->data, data, len_data);
+    ll_add(state->sent_segments, seg);
     state->next_seqno += len_data;
-   } else {
-    memset(seg->data, 0, len_data);
-    state->next_seqno ++;
-   }
-   
+   } else if (flags & FIN) {
+    ll_add(state->sent_segments, seg);
+    state->next_seqno++;
+   } 
    seg->cksum = cksum(seg, seg_len);
    return seg;
  }
@@ -295,12 +292,10 @@
  /* Helper function to send a segment */
  static void send_segment(ctcp_state_t *state, ctcp_segment_t *seg, size_t len) {
    if (conn_send(state->conn, seg, len) > 0) {
-    // sent SYN or FIN or DATA segment
-     if (seg->flags & (SYN | FIN | (len > sizeof(ctcp_segment_t)))) {
-       state->unacked_seg = seg;
-       state->unacked_len = len;
+    // sent FIN or DATA segment
+     if (ntohl(seg->flags) & (FIN | (len > sizeof(ctcp_segment_t)))) {
        state->last_sent_time = current_time();
-       state->xmit_count = 1;
+       state->xmit_count = 0;
      } else { // sent ACK segment
        free(seg);
      }
@@ -317,42 +312,40 @@
 
   /* Helper function to handle received segment */
   void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *seg) {
-    // Kiểm tra segment nhận được có phải là ACK segment không
-    if (ntohl(seg->flags) == ACK) {
-      /* Có 5 trường hợp host nhận dược ACK */
+    /* Có 5 trường hợp host nhận dược ACK */
 
-      // Trường hợp 1: Host đang đợi Host khác ACK lại DATA mà Host đã gửi
-      if (state->status == BLOCK_FOR_ACK) {
-        // Kiểm tra xem Host có segment nào chưa ACK không, nếu có thì kiểm tra xem ACK mong đợi nhận được có đúng không
-        if ((state->expected_ackno == ntohl(seg->ackno)) && state->unacked_seg) {
-          free(state->unacked_seg);
-          state->unacked_seg = NULL;
-          // Nếu còn dữ liệu từ input, tiếp tục về trạng thái WAIT_INPUT
-          if (state->input_eof != true) {
-            state->status = WAIT_INPUT;
-          } else {
+    // Trường hợp 1: Host đang đợi Host khác ACK lại DATA mà Host đã gửi
+    if (state->status == BLOCK_FOR_ACK) {
+      // Kiểm tra xem Host có segment nào chưa ACK trong LL không
+      ll_node_t *browse_node = state->sent_segments->head;
+      ctcp_segment_t *browse_seg = (ctcp_segment_t *)(browse_node->object);
 
-          }
-        } else { // Nếu ACK mong đợi nhận được không đúng thì retrans
-          if (state->xmit_count < 5) {
-            send_segment(state, state->unacked_seg, state->unacked_len);
-            state->xmit_count ++;
-          }
+      if (browse_node == NULL) {
+        // Nếu còn dữ liệu từ input, tiếp tục về trạng thái WAIT_INPUT
+        if (state->input_eof != true) {
+          state->status = WAIT_INPUT;
+        } else {
+
         }
-      } else if (state->status == FIN_WAIT_1) { // Đợi ACK cho FIN thứ 1 vừa gửi
-        if (state->expected_ackno ==  ntohl(seg->ackno)) {
-          state->status = FIN_WAIT_2;
+      } else { // Nếu có segment trong LL thif gửi lại
+        if (state->xmit_count < 5) {
+          send_segment(state, browse_seg, ntohl(browse_seg);
+          state->xmit_count ++;
         }
-      } else if (state->status == LAST_ACK) { // Đợi ACK cho FIN thứ 2 vừa gửi
-        if (state->expected_ackno ==  ntohl(seg->ackno)) {
-          ctcp_destroy(state);
-        }
-      } else if (state->status == CLOSING) { // Đợi ACK cho cả 2 FIN gửi đồng thời
-        state->status = TIME_WAIT;
-      } else if (state->status == WAIT_SEND_FIN) { // Đợi nốt các ACK còn lại cho DATA trước khi FIN
-        ctcp_segment_t *segment = create_segment(state, FIN, NULL, 0);
-        send_segment(state, segment, segment->len);
       }
+    } else if (state->status == FIN_WAIT_1) { // Đợi ACK cho FIN thứ 1 vừa gửi
+      if (state->expected_ackno ==  ntohl(seg->ackno)) {
+        state->status = FIN_WAIT_2;
+      }
+    } else if (state->status == LAST_ACK) { // Đợi ACK cho FIN thứ 2 vừa gửi
+      if (state->expected_ackno ==  ntohl(seg->ackno)) {
+        ctcp_destroy(state);
+      }
+    } else if (state->status == CLOSING) { // Đợi ACK cho cả 2 FIN gửi đồng thời
+      state->status = TIME_WAIT;
+    } else if (state->status == WAIT_SEND_FIN) { // Đợi nốt các ACK còn lại cho DATA trước khi FIN
+      ctcp_segment_t *segment = create_segment(state, FIN, NULL, 0);
+      send_segment(state, segment, segment->len);
     }
   }
 
@@ -376,6 +369,7 @@
     state->next_ackno++;
     ctcp_segment_t *ack = create_segment(state, ACK, NULL, 0);
     send_segment(state, ack, sizeof(ctcp_segment_t));
+    conn_output(state->conn, NULL, 0);
 
     if (state->status & FIN_WAIT_2) {
       state->status = TIME_WAIT;
@@ -386,7 +380,7 @@
        state->status = CLOSING;
      } else if (WAIT_INPUT == state->status) {
        state->status = CLOSE_WAIT;
-     } else /* if status is WAIT_SEND_FIN, received FIN = destroy connection */
+     } else 
        ctcp_destroy(state);
     }
   }
