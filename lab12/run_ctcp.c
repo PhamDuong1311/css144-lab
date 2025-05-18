@@ -166,63 +166,58 @@
    end_client();
  }
  
- void ctcp_read(ctcp_state_t *state)
- {
-   /* FIXME */
-   if (NULL == state)
-     return;
+ void ctcp_read(ctcp_state_t *state) {
+  // Kiểm tra kết nối còn tồn tại không
+   if (!state) return;
  
-   if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | WAIT_SEND_FIN) & state->status)
-   {
-     //printf("can't read input from stdin status: %x\n", state->status);
-     return;
-   }
+  // Bỏ qua nếu kết nối đang ở trạng thái không thể gửi (đang đợi nhận segmnet)
+   if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | WAIT_SEND_FIN) & state->status) return;
+
+  // Kiểm tra xem còn vùng trống trong swnd không, nếu không thì chuyển sang status BLOCK_FOR_ACK
    int bytes_left = state->sent_window - state->byte_sent;
-   if (0 >= bytes_left)
-   {
+   if (bytes_left <= 0) {
      state->status = BLOCK_FOR_ACK;
      return;
    }
      
+  // Từ dòng này trở đi là vẫn còn vùng trống trong swnd => có thể gửi thêm segment :))
+
+  // Số byte tối đa có thể đọc (so sánh MAX_SEG_DATA_SIZE với vùng trống trong swnd)
    int max_byte = bytes_left < MAX_SEG_DATA_SIZE ? bytes_left : MAX_SEG_DATA_SIZE;
-   int byte_read = 0;
-     
-   /* read input locally to be put into segments */
-   byte_read = conn_input(state->conn, state->buf_sent, max_byte);
-   {
-     if (0 > byte_read) /* error or EOF */
-     {
-       if (CLOSE_WAIT == state->status)
-       {
+
+  // Đọc từ stdin với số byte tối đa có thể đọc vừa tính được (chia nhỏ data đầu vào thành các segment hoặc nhỏ hơn), lưu vào buffer
+   int byte_read = conn_input(state->conn, state->buf_sent, max_byte);
+   { // Hết byte đọc từ stdin => EOF => gửi FIN segment
+     if (byte_read < 0) {
+      // Đóng FIN lần 2
+       if (state->status == CLOSE_WAIT) {
          state->status = LAST_ACK;
          create_segment_and_send(state, NULL, 0, FIN, state->ackno);
-         state->byte_sent++; /* treat fin as 1 byte data segment */
+         state->byte_sent++;
          return;
        }
- 
-       if (0 == ll_length(state->sent_segments))
-       {
-         //printf("state change to FIN_WAIT_1\n");
+      
+      // Đóng FIN lần 1
+      // Các segment trong LL đã ACK hết => length của LL = 0 => gửi FIN segment
+       if (ll_length(state->sent_segments) == 0) {
          state->status = FIN_WAIT_1;
          create_segment_and_send(state, NULL, 0, FIN, state->ackno);
-         state->byte_sent++; /* treat fin as 1 byte data segment */
+         state->byte_sent++; 
          return;
-       }
-       else
-       {
-         //printf("state changed to WAIT_SEND_FIN: sent_segments not null\n");
+       } else { // Tồn tại segment trong LL chưa ACK => length của LL != 0 => Gửi nốt ACk rồi gửi FIN ( xử lý lại chỗ này)
          state->status = WAIT_SEND_FIN;
          create_segment_and_send(state, NULL, 0, FIN, state->ackno);
-         state->byte_sent++; /* treat fin as 1 byte data segment */
+         state->byte_sent++; 
          return;
        }
-     }
-     else if (0 < byte_read)/* data read */
-     {
+     } else if (byte_read > 0) { // Còn byte đọc từ stdin => gửi DATA segment
        create_segment_and_send(state, state->buf_sent, byte_read, 0, state->ackno);
        state->byte_sent += byte_read;
      }
+     // Xóa buffer đọc từ stdin sau khi đã gửi đi
      memset(state->buf_sent, 0, MAX_SEG_DATA_SIZE);
+
+     // Trường hợp gửi ACK segment đã được xử lý lại handle ở bên ctcp_receive()
    }
  }
  
@@ -333,47 +328,64 @@
    }
  }
  
- /* function create segment and send to other side */
- void create_segment_and_send(ctcp_state_t *state, char *buffer, uint16_t buf_len, uint32_t flags, uint32_t ack_num)
- {
-   if (true == state->first_seg)
-   {
+ /* Hàm tạo segment và gửi sang bên khác */
+ void create_segment_and_send(ctcp_state_t *state, char *buffer, uint16_t buf_len, uint32_t flags, uint32_t ack_num) {
+  // Chia data nhận từ stdin thành các segment và điều kiện gửi thoải mãn swnd xử lý tại ctcp_read() 
+
+  // Nếu đây là DATA segment đầu tiên được gửi đi, gán flags mặc định là ACK (vì data transfer lúc nào cũng có ACK flags) 
+  if (true == state->first_seg) {
      state->first_seg = false;
      flags |= ACK;
    }
+   
+   // Kích thước segment: header (sizeof(ctcp_segment_t)) + payload (buf_len)
    uint16_t seg_len;
    seg_len = sizeof(ctcp_segment_t) + buf_len;
+
+   // Đóng gói các field của segment
    ctcp_segment_t *segment = calloc(1, seg_len);
    segment->seqno = htonl(state->seqno);
    segment->ackno = htonl(ack_num);
    segment->len = htons(seg_len);
    segment->flags = htonl(flags);
    segment->window = htons(state->sent_window);
+
+   // Ban đầu cksum = 0 để tính cksum mới
    segment->cksum = 0;
      
-   if (0 < buf_len) /* data segment */
-   {
-     memcpy(segment->data, buffer, buf_len);
-     ll_add(state->sent_segments, segment);
-     state->seqno += buf_len;
-   }
-   else if (FIN & flags)
-   {
-     ll_add(state->sent_segments, segment);
-     state->seqno++;
-   }
-     
-   segment->cksum = cksum(segment, seg_len);
-   conn_send(state->conn, segment, seg_len);
-   if ((ACK & flags) && (0 == buf_len)) /*ack segment only*/
-     free(segment);
+   // Data segment
+   if (buf_len > 0) {
+      memcpy(segment->data, buffer, buf_len);
+      state->seqno += buf_len;
+
+      // Thêm DATA segment vừa gửi vào LL để chờ ACK cho segment (Nếu nhận được ACK thì xóa khỏi LL)
+      ll_add(state->sent_segments, segment);
+
+      // Tính lại cksum
+      segment->cksum = cksum(segment, seg_len);
+      conn_send(state->conn, segment, seg_len);
+   } 
+
+   // FIN segment
+   if (flags & FIN) { 
+      state->seqno++;
+
+      // Nếu là FIN segment thì cũng thêm vào LL chờ ACK 
+      ll_add(state->sent_segments, segment);
+
+      // Tính lại cksum
+      segment->cksum = cksum(segment, seg_len);
+      conn_send(state->conn, segment, seg_len);
+   } 
+
+   // ACK segment
+   if ((flags & ACK) && (buf_len == 0)) free(segment); 
  }
  
- /* function handle FIN segment received in different cases */
- void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
- {
-   /* send ACK for FIN as a "1-byte data" segment with no data */
-   uint32_t ack_num = ntohl(segment->seqno) + 1;
+ /* Xử lý FIN segment nhận được */
+ void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
+  // Dù ở status nào thì khi 
+  uint32_t ack_num = ntohl(segment->seqno) + 1;
    create_segment_and_send(state, NULL, 0, ACK, ack_num);
    conn_output(state->conn, NULL, 0);
    //ctcp_destroy(state);
