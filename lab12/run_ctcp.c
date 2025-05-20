@@ -221,13 +221,10 @@ void ctcp_read(ctcp_state_t *state) {
   }
 }
 
-void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len)
-{
-  /* FIXME */
-  if (NULL == state || NULL == segment)
-    return;
+void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
+  if (!state || !segment) return;
   
-  fprintf(stderr, "recv: %ld\n", len);  
+  // Kiểm tra cksum
   int check = is_corrupted_seg(segment, len);
   if (1 == check)
   {
@@ -317,12 +314,9 @@ void ctcp_output(ctcp_state_t *state)
 }
 
 void ctcp_timer() {
-  /* FIXME */
   ctcp_state_t *state = state_list; 
-  //fprintf(stderr, "ll_length: %d\n", ll_length(state -> sent_segments));  
-  while (state)
-  {
-    if (0 != ll_length(state->sent_segments))
+  while (state) {
+    if (ll_length(state->sent_segments))
       retransmission_handle(state);
     state = state->next;
   }
@@ -542,15 +536,10 @@ void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
   if (state->ackno == ntohl(segment->seqno)) ctcp_output(state);
 }
 
-/* funtion using checksum to check whether segment is corrupted
-* return 1 if corrupt, 0 otherwise */
-int is_corrupted_seg(ctcp_segment_t *segment, size_t len)
-{
-    
-  if (NULL == segment)
-    return 1;
-  if (len != ntohs(segment->len))
-    return 1;
+/* Hàm kiểm tra checksum của segment nhận được có đúng không */
+int is_corrupted_seg(ctcp_segment_t *segment, size_t len) {  
+  if (!segment) return 1;
+  if (ntohs(segment->len) != len) return 1;
   uint16_t computed_cksum = segment->cksum;
   uint16_t cksum_test;
   segment->cksum = 0;
@@ -558,46 +547,32 @@ int is_corrupted_seg(ctcp_segment_t *segment, size_t len)
   return (cksum_test == computed_cksum ? 0 : 1);
 }
 
-/* funtion get time interval from last send to current */
-uint32_t get_time_from_last_trans(ctcp_state_t *state)
-{
-  if (NULL == state)
-  {
-    //printf("error get time from last trans: state NULL!\n");
-    return -1;
-  }
+/* Hàm lấy thời gian từ lần cuối gửi segment cho tới hiện tại */
+uint32_t get_time_from_last_trans(ctcp_state_t *state) {
+  if (!state) return -1;
   uint32_t time_interval =  (long)current_time() - ((uint32_t)state->start_send_time.tv_sec * 1000 + (uint32_t)state->start_send_time.tv_usec / 1000);
   return time_interval;
 }
 
-/* function handle retransmission, return number of restransmission times, -1 if error or disconnected */
-void retransmission_handle(ctcp_state_t *state)
-{
-  if (NULL == state)
-    return;
+/* Hàm retransmit segment khi timeout */
+void retransmission_handle(ctcp_state_t *state) {
+  if (!state) return;
   linked_list_t *list = state->sent_segments;
   uint32_t time_get = get_time_from_last_trans(state);
-  printf("time get %u\n", time_get);
-  /* time out happen */
-  if (time_get >= state->rt_timeout)
-  {
-    state->retrans_count++;
-    //printf("time out happen %d\n", state->retrans_count);
-    if (5 < state->retrans_count)
-    {
-      ctcp_destroy(state);
-      fprintf(stderr, "Retrans Counter: %d\n", state -> retrans_count); 
-      return;
-    }
         
-    /* retransmit data */
-    if (NULL != list->head)
-    {
-      ctcp_segment_t *segment = (ctcp_segment_t *)(list->head->object);
-      conn_send(state->conn, segment, ntohs(segment->len));
+  if (list->head) {
+    ctcp_segment_t *segment = (ctcp_segment_t *)(list->head->object);
+    if (time_get >= state->rt_timeout) {
+      if (state->retrans_count > 5) {
+        ctcp_destroy(segment);
+        return;
+      } else {
+        conn_send(state->conn, segment, ntohs(segment->len));
+        state->retrans_count++;
+      }
     }
-    gettimeofday(&(state->start_send_time), NULL);
   }
+  gettimeofday(&(state->start_send_time), NULL);
 }
 
 
