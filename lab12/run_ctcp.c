@@ -360,10 +360,6 @@ if (true == state->first_seg) {
 
     // Thêm DATA segment vừa gửi vào LL để chờ ACK cho segment (Nếu nhận được ACK thì xóa khỏi LL)
     ll_add(state->sent_segments, segment);
-
-    // Tính lại cksum
-    segment->cksum = cksum(segment, seg_len);
-    conn_send(state->conn, segment, seg_len);
   } 
 
   // FIN segment
@@ -372,11 +368,9 @@ if (true == state->first_seg) {
 
     // Nếu là FIN segment thì cũng thêm vào LL chờ ACK 
     ll_add(state->sent_segments, segment);
-
-    // Tính lại cksum
-    segment->cksum = cksum(segment, seg_len);
-    conn_send(state->conn, segment, seg_len);
   } 
+  segment->cksum = cksum(segment, seg_len);
+  conn_send(state->conn, segment, seg_len);
 
   // ACK segment
   if ((flags & ACK) && (buf_len == 0)) free(segment); 
@@ -399,20 +393,17 @@ void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
   // Nếu status đang chờ nhận FIN segment thứ 2
   if (state->status & FIN_WAIT_2) {
     state->status = TIME_WAIT;
-    printf("state changed from FIN_WAIT_2 to TIME_WAIT \n");
     ctcp_destroy(state);
   }
 
   // Cả 2 bên gửi FIN đồng thời
   if (state->status & FIN_WAIT_1) {
-    printf("state changed from FIN_WAIT_1 to CLOSING \n");
     state->status = CLOSING;
   }
 
   // Đợi app gọi close(), peer gửi FIN trước
   if (state->status & WAIT_INPUT) {
     state->fin_recv_first = true;
-    printf("state changed to CLOSE_WAIT\n");
     state->status = CLOSE_WAIT;
   }
 
@@ -623,9 +614,9 @@ int init_timer(timer_t *t_id)
 {
   delay_keep = 0;
     
-  struct sigevent sig_event;
-  sig_event.sigev_notify = SIGEV_THREAD;
-  sig_event.sigev_notify_function = expired_func;
+  // struct sigevent sig_event;
+  // sig_event.sigev_notify = SIGEV_THREAD;
+  // sig_event.sigev_notify_function = expired_func;
 
   int res;
   res = 1; // timer_create(CLOCK_REALTIME, &sig_event, t_id);
@@ -637,11 +628,11 @@ int init_timer(timer_t *t_id)
 }
 void set_timer(timer_t t_id, int period_ms)
 {
-  struct itimerspec infor_timer = {.it_interval.tv_sec = period_ms/1000,
-                                  .it_interval.tv_nsec = 0,
-                                  .it_value.tv_sec = period_ms/1000,
-                                  .it_value.tv_nsec = 0
-  };
+  // struct itimerspec infor_timer = {.it_interval.tv_sec = period_ms/1000,
+  //                                .it_interval.tv_nsec = 0,
+  //                                .it_value.tv_sec = period_ms/1000,
+  //                                .it_value.tv_nsec = 0
+  //};
   int res = 1; //timer_settime(t_id, 0, &infor_timer, NULL);
   if (-1 == res)
   {

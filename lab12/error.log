@@ -1,0 +1,14 @@
+
+Usage: ctcp
+   -c server_host:server_port  [client only]
+   -s                          [server only]
+   -p port
+   [-d]
+   [-w window_size]
+   [--seed seed]
+   [--drop drop_percent]
+   [--corrupt corrupt_percent]
+   [--delay delay_percent]
+   [--duplicate duplicate_percent]
+   [-- program arg1 arg2 ...]
+
