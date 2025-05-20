@@ -226,90 +226,66 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
   
   // Kiểm tra cksum
   int check = is_corrupted_seg(segment, len);
-  if (1 == check)
-  {
-    //printf("corrupt happen\n");
+  if (check) {
     free(segment);
     return;
   }
-  if (state->first_seg)
-  {
+  if (state->first_seg) {
     state->first_seg = 0;
     state->seqno = ntohl(segment->ackno);
   }
+
   uint32_t flags = segment->flags;
     
-  if ((TH_ACK & flags) && (TH_FIN & flags))
-  {
+  if ((TH_ACK & flags) && (TH_FIN & flags)) {
     ack_seg_handle(state, segment);
     fin_seg_handle(state, segment);
-  }
-  else if (TH_FIN & flags)
-  {
+  } else if (TH_FIN & flags) {
     fin_seg_handle(state, segment);
-  }
-  else if (TH_ACK & flags)
-  {
-    ack_seg_handle(state, segment);
-        
+  } else if (TH_ACK & flags) {
+    ack_seg_handle(state, segment);    
     /* piggybacked ack */
-    if (ntohs(segment->len) > sizeof(ctcp_segment_t))
-    {
+    if (ntohs(segment->len) > sizeof(ctcp_segment_t)) {
       data_seg_handle(state, segment);
     }
-  }
-  else if (0 == flags)  
-  {
+  } else if (flags == 0) {
     data_seg_handle(state, segment);
   }
   free(segment);
 }
 
 
-void ctcp_output(ctcp_state_t *state)
-{
-  /* FIXME */
-  if (NULL == state)
-    return;
+void ctcp_output(ctcp_state_t *state) {
+  if (!state) return;
     
-  ll_node_t *browse_node = NULL;
-  browse_node = state->recv_segments->head;
-  if (NULL == browse_node)
-    return;
+  ll_node_t *browse_node = state->recv_segments->head;
+  if (!browse_node) return;
     
   ctcp_segment_t *browse_seg = NULL;
   uint16_t data_seg_len = 0;
     
-  while (NULL != browse_node)
-  {
+  while (browse_node) {
     browse_seg = (ctcp_segment_t *)(browse_node->object);
-    if (ntohl(browse_seg->seqno) == state->ackno)
-    {
+    if (ntohl(browse_seg->seqno) == state->ackno) {
       data_seg_len = ntohs(browse_seg->len) - sizeof(ctcp_segment_t);
             
+      // Xác định không gian trống trong buffer đầu ra
       size_t buf_space = conn_bufspace(state->conn);
+      // Xác định lượng dữ liệu có thể xuất ra
       size_t val_can_output = (data_seg_len < buf_space) ? data_seg_len : buf_space;
       /* bufspace may has some error, this case terminate connection */
-      if (val_can_output != data_seg_len)
-      {
-        printf("wtf\n");
+      if (val_can_output != data_seg_len) {
         ctcp_destroy(state);
-      }
-      else
-      {
-        if (val_can_output != conn_output(state->conn, browse_seg->data, val_can_output))
-        {
-          //printf("error conn_output\n");
+      } else { // Ghi dữ liệu vào buffer đầu ra kết nối
+        if (val_can_output == conn_output(state->conn, browse_seg->data, val_can_output)) {
+          // Cập nhật state sau khi ghi
+          state->byte_recv -= data_seg_len; // Giảm số byte đã nhận
+          state->ackno += data_seg_len; // Tăng ACK mong đợi
+          free(ll_remove(state->recv_segments, browse_node)); // Giải phóng segment đã xử lý
+          browse_node = ll_front(state->recv_segments); // Chuyển tới segment đầu tiên mới
         }
-                
-        state->byte_recv -= data_seg_len;
-        state->ackno += data_seg_len;
-        free(ll_remove(state->recv_segments, browse_node));
-        browse_node = ll_front(state->recv_segments);
       }
-    }
-    else
-      browse_node = browse_node->next;
+    } else browse_node = browse_node->next; // Nếu không đúng ACK, chuyển sang segment khác
   }
 }
 
@@ -557,14 +533,14 @@ uint32_t get_time_from_last_trans(ctcp_state_t *state) {
 /* Hàm retransmit segment khi timeout */
 void retransmission_handle(ctcp_state_t *state) {
   if (!state) return;
-  linked_list_t *list = state->sent_segments;
+  ll_node_t *browse_node = state->sent_segments->head;
   uint32_t time_get = get_time_from_last_trans(state);
         
-  if (list->head) {
-    ctcp_segment_t *segment = (ctcp_segment_t *)(list->head->object);
+  if (browse_node) {
+    ctcp_segment_t *segment = (ctcp_segment_t *)(browse_node->object);
     if (time_get >= state->rt_timeout) {
       if (state->retrans_count > 5) {
-        ctcp_destroy(segment);
+        free(ll_remove(state->sent_segments, browse_node));
         return;
       } else {
         conn_send(state->conn, segment, ntohs(segment->len));
