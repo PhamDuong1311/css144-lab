@@ -1156,6 +1156,7 @@ void do_loop() {
 
       if (conn != NULL)
         ctcp_read(conn->state);
+        fprintf(stderr, "[DEBUG]: Status: %d\n", conn->state->status);
     }
 
     /* See if we can output more. */

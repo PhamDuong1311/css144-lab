@@ -169,7 +169,6 @@ void ctcp_destroy(ctcp_state_t *state) {
 void ctcp_read(ctcp_state_t *state) {
 // Kiểm tra kết nối còn tồn tại không
   if (!state) return;
-  fprintf(stderr, "READDDDD");
 // Bỏ qua nếu kết nối đang ở trạng thái không thể gửi (đang đợi nhận segmnet)
   if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | WAIT_SEND_FIN) & state->status) return;
 
