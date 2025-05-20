@@ -628,7 +628,7 @@ int init_timer(timer_t *t_id)
   sig_event.sigev_notify_function = expired_func;
 
   int res;
-  res = timer_create(CLOCK_REALTIME, &sig_event, t_id);
+  res = 1; // timer_create(CLOCK_REALTIME, &sig_event, t_id);
   if (-1 == res)
   {
     //printf("fail to create timer!\n");
@@ -642,7 +642,7 @@ void set_timer(timer_t t_id, int period_ms)
                                   .it_value.tv_sec = period_ms/1000,
                                   .it_value.tv_nsec = 0
   };
-  int res = timer_settime(t_id, 0, &infor_timer, NULL);
+  int res = 1; //timer_settime(t_id, 0, &infor_timer, NULL);
   if (-1 == res)
   {
     //printf("fail to start/stop timer!");
