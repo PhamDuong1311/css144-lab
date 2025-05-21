@@ -159,7 +159,7 @@ void ctcp_destroy(ctcp_state_t *state) {
     
   /* FIXME: Do any other cleanup here. */
   ll_node_t *tmp_node = NULL;
-  while (NULL != (tmp_node = ll_front(state->sent_segments)))
+  while ((tmp_node = ll_front(state->sent_segments)))
     free(ll_remove(state->sent_segments, tmp_node));
     
   tmp_node = NULL;

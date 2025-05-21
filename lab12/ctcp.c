@@ -46,24 +46,18 @@ struct ctcp_state {
     
   conn_t *conn;             /* Connection object -- needed in order to figure
                               out destination when sending */
-  linked_list_t *sent_segments;  /* Linked list of segments sent to this connection.
-                                    It may be useful to have multiple linked lists
-                                    for unacknowledged segments, segments that
-                                    haven't been sent, etc. Lab 1 uses the
-                                    stop-and-wait protocol and therefore does not
-                                    necessarily need a linked list. You may remove
-                                    this if this is the case for you */
+  linked_list_t *sent_segments;  /* LL lưu các FIN, DATA segment đang đợi ACK */
     
   /* FIXME: Add other needed fields. */
-  linked_list_t *recv_segments; /* Các segment nhận được */
+  linked_list_t *recv_segments; /* LL lưu các DATA segment đang đợi đẩy ra output */
   uint32_t seqno; /* seqno sẽ gửi */
   uint32_t ackno; /* ackno mong nhận được */
   uint16_t status; /* status hiện tại */
   int byte_sent; /* Số byte đã gửi đi cho host khác chưa ACK */
   int byte_recv; /* Số byte nhận được chưa đẩy ra stdout */
   char buf_sent[MAX_SEG_DATA_SIZE]; // Buffer để lưu trữ dữ liệu input
-  uint16_t recv_window; /* receive window size  (MAX_SEG_DATA_SIZE) */
-  uint16_t sent_window; /* Kích thước swnd (MAX_SEG_DATA_SIZE) */
+  uint16_t recv_window; /* receive window size  (cfg) */
+  uint16_t sent_window; /* Kích thước swnd (cfg) */
   int rt_timeout; /* retransmission timeout,in ms */
   struct timeval start_send_time; /* Thời gian bắt đầu gửi */
   int retrans_count;  /* Số lần gửi lại của 1 segment*/
@@ -107,7 +101,25 @@ ctcp_state_t *ctcp_init(conn_t *conn, ctcp_config_t *cfg) {
     
   /* Set fields. */
   state->conn = conn;
-  /* FIXME: Do any other initialization here. */
+  state->sent_segments = ll_create(); // Tạo 1 new LL chứa các segment đã gửi nhưng chưa ACK
+  state->recv_segments = ll_create(); // Tạo tương tự 1 new LL cho các segment đã nhận
+  state->seqno = 1;
+  state->ackno = 1;
+  state->status = WAIT_INPUT; // Bởi vì coi như 3-way handshake tự được xử lý, mình chỉ cần handle data transfer và 4-way handshake
+  state->byte_sent = 0;
+  state->byte_recv = 0;
+  memcpy(state->buf_sent, 0, MAX_SEG_DATA_SIZE);
+  state->recv_window = cfg->recv_window; 
+  state->sent_window = cfg->send_window;
+  state->rt_timeout = cfg->rt_timeout;
+
+  state->retrans_count = 0;
+  state->fin_recv_first = false;
+  state->first_seg = true;
+
+  free(cfg);
+
+  return state;
 
 }
 
@@ -120,7 +132,20 @@ void ctcp_destroy(ctcp_state_t *state) {
   conn_remove(state->conn);
     
   /* FIXME: Do any other cleanup here. */
+  /* GIải phóng các segment gửi */
+  ll_node_t *sent_node = ll_front(state->sent_segments); 
+  while (sent_node) {
+    free(ll_remove(state->sent_segments, tmp_node));
+  }
 
+  /* Giải phóng các segment nhận */
+  ll_node_t *recv_node = ll_front(state->recv_segments);
+  while (recv_node) {
+    free(ll_remove(state->recv_segments, recv_node));
+  }
+
+  /* Giải phóng state */
+  free(state);
 }
 
 void ctcp_read(ctcp_state_t *state) {
@@ -142,21 +167,97 @@ void ctcp_timer() {
 
 /* Hàm tạo segment và gửi sang bên khác */
 void create_segment_and_send(ctcp_state_t *state, char *buffer, uint16_t buf_len, uint32_t flags, uint32_t ack_num) {
+  uint16_t seg_len = sizeof(ctcp_segment_t) + buf_len;
+  ctcp_segment_t *segment = calloc(1, seg_len);
+  segment->seqno = htonl(state->seqno);
+  segment->ackno = htonl(ack_num);
+  segment->len = htons(seg_len);
+  segment->flags = htonl(flags);
+  segment->window = htons(state->sent_window);
+  segment->cksum = 0;
 
+  // Gửi DATA segment
+  if (buf_len > 0) {
+    memcpy(segment->data, buffer, buf_len);
+    state->seqno += buf_len;
+    ll_add(state->sent_segments, segment);
+  } else if (flags == FIN) { // Gửi FIN segment
+    state->seqno++;
+    ll_add(state->sent_segments, segment);
+  }
+  
+  // Tính lại cksum và gửi đi (sử dụng chung cho cả 3 loại segment: data, fin, ack)
+  segment->cksum = cksum(segment, seg_len);
+  conn_send(state->conn, segment, seg_len);
+
+  if ((buf_len == 0) && (flags == ACK)) free(segment);
 }
 
 /* Xử lý FIN segment nhận được */
 void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
 
+  // Tăng ack và gửi đi
+  uint32_t ack_num = ntohl(segment->seqno) + 1;
+  create_segment_and_send(state, NULL, 0, ACK, ack_num);
+
+  // Kiểm tra FIN segment nhận được có đúng segment đang chờ không
+  if (state->ackno == ntohl(segment->seqno) {
+    state->ackno = ack_num;
+  }
+  
+  // Thay đổi status
+  if (state->status == FIN_WAIT_2) {
+    state->status = TIME_WAIT;
+    // Chèn thêm timer function vào đây
+    ctcp_destroy(state);
+  } else if (state->status == FIN_WAIT_1) {
+    state->status = CLOSING;
+  } else if (state->status == WAIT_INPUT) {
+    state->status = CLOSE_WAIT;
+    state->fin_recv_first = true;
+  }
 }
 
 /* Hàm xử lý ACK segment nhận được */
 void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
-
+  
 }
 
 /* Hàm xử lý khi nhận DATA segment */
 void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
+  uint16_t data_len = ntohs(segment->len) - sizeof(ctcp_segment_t);
+  uint32_t ack_num = ntohl(segment->seqno) + data_len
+
+  /* Các vấn đề xảy ra trong quá trình nhận Data transfer*/
+  // 1. Segment bắt đầu đúng chỗ (seqno hợp lệ) nhưng data trong segment quá dài => tràn recv_window
+  if ((data_len + state->byte_recv) > state->recv_window) return;
+
+  // 2. Segment bắt đầu sai chỗ (seqno hợp lệ chỉ nhận từ seqno thuộc [ackno, ackno + recv_window -1])
+  if (ntohl(segment->seqno) >= (state->ackno + state->recv_window)) return;
+
+  // 3. Segment trùng lặp (Đã gửi ACK cho Sender nhưng Sender không nhận được)
+  if (state->ackno >= ack_num) return;
+
+  // 4. Segment trùng lặp (Chưa gửi ACK cho Sender vì segment nằm trong buffer - không đến đúng thứ tự)
+  if (ll_length(state->recv_segments)) {
+    ll_node_t *check_node = ll_front(state->recv_segments);
+    while (check_node) {
+      ctcp_segment_t *check_seg = (ctcp_segment_t *)check_node->object; 
+      if (check_seg->seqno == segment->seqno) return;
+      check_node = check_node->next;
+    }
+  }
+
+  // Khi segment đã hợp lệ
+  state->byte_recv += data_len;
+  state->ackno = ack_num;
+  create_segment_and_send(state, NULL, data_len, ACK, ack_num);
+
+  ctcp_segment_t *copy_segment = calloc(1, ntohs(segment->len));
+  memcpy(copy_segment, segment, ntohs(segment->len));
+  ll_add(state->recv_segments, copy_segment);
+
+  if (state->ackno == ntohl(segment->seqno)) ctcp_output(state);
 
 }
 
