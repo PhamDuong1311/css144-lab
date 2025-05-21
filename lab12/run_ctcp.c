@@ -11,6 +11,10 @@
 *
 *****************************************************************************/
 
+/*
+* Segment length (byte)= Header(20) + Payload(data + 1)
+*/
+
 #include "ctcp.h"
 #include "ctcp_linked_list.h"
 #include "ctcp_sys.h"
@@ -302,7 +306,7 @@ void create_segment_and_send(ctcp_state_t *state, char *buffer, uint16_t buf_len
 // Chia data nhận từ stdin thành các segment và điều kiện gửi thoải mãn swnd xử lý tại ctcp_read() 
 
 // Nếu đây là DATA segment đầu tiên được gửi đi, gán flags mặc định là ACK (vì data transfer lúc nào cũng có ACK flags) 
-if (true == state->first_seg) {
+if (state->first_seg == true) {
     state->first_seg = false;
     flags |= ACK;
   }
