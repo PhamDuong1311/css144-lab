@@ -47,20 +47,23 @@ struct ctcp_state {
   conn_t *conn;             /* Connection object -- needed in order to figure
                               out destination when sending */
   linked_list_t *sent_segments;  /* LL lưu các FIN, DATA segment đang đợi ACK */
-    
-  /* FIXME: Add other needed fields. */
+  int retrans_count;  /* Số lần gửi lại của 1 segment*/
+
   linked_list_t *recv_segments; /* LL lưu các DATA segment đang đợi đẩy ra output */
+  
   uint32_t seqno; /* seqno sẽ gửi */
   uint32_t ackno; /* ackno mong nhận được */
   uint16_t status; /* status hiện tại */
+
   int byte_sent; /* Số byte đã gửi đi cho host khác chưa ACK */
   int byte_recv; /* Số byte nhận được chưa đẩy ra stdout */
   char buf_sent[MAX_SEG_DATA_SIZE]; // Buffer để lưu trữ dữ liệu input
   uint16_t recv_window; /* receive window size  (cfg) */
   uint16_t sent_window; /* Kích thước swnd (cfg) */
+
   int rt_timeout; /* retransmission timeout,in ms */
   struct timeval start_send_time; /* Thời gian bắt đầu gửi */
-  int retrans_count;  /* Số lần gửi lại của 1 segment*/
+  
   bool fin_recv_first; /* FIN segment đầu tiên nhận được*/
   bool first_seg; /* Segment đầu tiên (cả nhận cả gửi) */
 };
@@ -149,11 +152,60 @@ void ctcp_destroy(ctcp_state_t *state) {
 }
 
 void ctcp_read(ctcp_state_t *state) {
+  // Kiểm tra status đọc
+  if (!state) return;
 
+  if (state->status & (BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | CLOSING | WAIT_SEND_FIN)) return 1;
+
+  // Kiểm tra kích thước còn lại của swnd để nhận data
+  uint16_t byte_left = state->sent_window - state->byte_sent;
+  if (byte_left < 0) {
+    state->status = BLOCK_FOR_ACK;
+    return;
+  }
+
+  uint16_t max_byte = byte_left > MAX_SEG_DATA_SIZE ? MAX_SEG_DATA_SIZE : byte_left;
+
+  // Đọc dữ liệu và tạo dữ liệu (thay đổi status luôn)
+  int byte_read = conn_input(state->conn, state->buf_sent, max_byte);
+
+  // Gửi DATA segment
+  if (byte_read > 0) {
+    create_segment_and_send(state, state->buf_sent, byte_read, 0, state->ackno);
+    state->status = BLOCK_FOR_ACK;
+    memcpy(state->buf_sent, 0, MAX_SEG_DATA_SIZE);
+    return;
+  } else if (byte_read < 0) {
+      // Gửi FIN segment lần 2
+      if (state->status == CLOSE_WAIT) {
+        create_segment_and_send(state, NULL, 0, FIN, state->ackno);
+        state->status = LAST_ACK;
+        return;
+      } 
+
+      // Gửi FIN segment lần 1
+      if (ll_length(state->sent_segments) == 0) {
+        create_segment_and_send(state, NULL, 0, FIN, state->ackno);
+        state->status = FIN_WAIT_1;
+        return;
+      } else {
+        state->status = WAIT_SEND_FIN;
+        ctcp_timer();
+        return;
+      }
+  } 
 }
 
 void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
+  if (!state || !segment) return;
 
+  int is_correct_cksum = is_corrupted_seg(segment, len);
+  if (!is_correct_cksum) {
+    free(segment);
+    return;
+  }
+
+  
 }
 
 
@@ -180,9 +232,11 @@ void create_segment_and_send(ctcp_state_t *state, char *buffer, uint16_t buf_len
   if (buf_len > 0) {
     memcpy(segment->data, buffer, buf_len);
     state->seqno += buf_len;
+    state->byte_sent += buf_len;
     ll_add(state->sent_segments, segment);
   } else if (flags == FIN) { // Gửi FIN segment
     state->seqno++;
+    state->byte_sent++;
     ll_add(state->sent_segments, segment);
   }
   
@@ -220,7 +274,49 @@ void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
 
 /* Hàm xử lý ACK segment nhận được */
 void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
-  
+  if (!state || !segment) return;
+
+  // Duyệt tất các các node để xem ACK segment của node nào và giải phóng
+  ll_node_t *node = ll_front(state->sent_segments);
+  while (node) {
+    ctcp_segment_t *seg = (ctcp_segment_t *)node->object;
+    uint16_t data_len = ntohs(seg->len) - sizeof(ctcp_segment_t);
+
+    if (seg->flags & TH_FIN) data_len = 1;
+    if (ntohl(segment->ackno) != seg->seqno + data_len) {
+      conn_send(state->conn, seg, seg->len);
+    } else {
+      state->byte_sent -= data_len;
+      free(ll_remove(state->sent_segments, seg));
+      state->retrans_count = 0;
+    }
+    node = node->next;
+
+  }
+
+  // Thay đổi status
+  if (ll_length(state->sent_segments) == 0) {
+    if (state->status == BLOCK_FOR_ACK) {
+      if (state->fin_recv_first = true) state->status = CLOSE_WAIT;
+      else state->status = WAIT_INPUT;
+    } else if (state->status == FIN_WAIT_1) {
+      state->status = FIN_WAIT_2;
+    } else if (state->status == LAST_ACK) {
+      ctcp_destroy(state);
+    } else if (state->status == CLOSING) {
+      state->status = TIME_WAIT;
+      // timer
+      ctcp_destroy(state);
+    } else if (state->status == WAIT_SEND_FIN) {
+      create_segment_and_send(state, NULL, 0, FIN, ntohl(segment->seqno) + 1);
+      state->byte_sent++;
+      if (state->fin_recv_first = true) ctcp_destroy(state);
+      else state->status = FIN_WAIT_2; 
+    }
+  } else {
+    if (state->fin_recv_first == true) state->status = CLOSE_WAIT;
+    else state->status = WAIT_INPUT;
+  }
 }
 
 /* Hàm xử lý khi nhận DATA segment */
@@ -270,17 +366,38 @@ void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
 }
 
 /* Hàm kiểm tra checksum của segment nhận được có đúng không */
-int is_corrupted_seg(ctcp_segment_t *segment, size_t len) {  
+int is_corrupted_seg(ctcp_segment_t *segment, size_t len) {
+  if (!segment) return 0;
 
+  uint16_t cksum = segment->cksum;
+  segment->cksum = 0;
+  uint16_t check_cksum = cksum(segment, len);
+  return (check_cksum == cksum) ? 1 : 0;
 }
 
 /* Hàm lấy thời gian từ lần cuối gửi segment cho tới hiện tại */
 uint32_t get_time_from_last_trans(ctcp_state_t *state) {
+  if (!state) return -1;
 
+  return (long)current_time() - ((uint32_t)state->start_send_time.tv_sec * 1000 + (uint32_t)state->start_send_time.tv_usec / 1000);
 }
 
 /* Hàm retransmit segment khi timeout */
 void retransmission_handle(ctcp_state_t *state) {
+  if (!state) return;
 
+  ll_node_t *node = ll_front(state->sent_segments);
+  while (node) {
+    ctcp_segment_t *seg = (ctcp_segment_t *) node->object;
+    if (get_time_from_last_trans(state) >= state->rt_timeout) {
+      if (state->retrans_count > 5) {
+        free(ll_remove(state->sent_segments, seg));
+        return;
+      } else {
+        conn_send(state->conn, seg, ntohl(seg->len));
+        state->retrans_count++;
+      }
+    }
+  }
 }
 

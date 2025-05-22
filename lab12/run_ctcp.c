@@ -466,10 +466,10 @@ void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
   uint32_t ack_num = seq_num + data_len;
     
   /* Kiểm tra điều kiện nhận segment */
-  // 1. Không nhận nếu vùng đệm nhận (recv_window) đầy
+  // 1. Trong SR,DATA segment có data_len quá lớn tràn recv_window (bắt đầu đúng nhưng quá dài)
   if (state->recv_window < (state->byte_recv + data_len)) return;
 
-  // 2. Kiểm tra segment có nằm ngoài cửa sổ nhận không
+  // 2. Trong SR, recv_window chỉ nhận 1 số lượng seg nhất định có seqno từ [ackno, ackno + recv_window - 1] (bắt đầu sai)
   if (seq_num >= (state->ackno + state->recv_window)) return;
 
   // 3. Nếu segment đã được ACK rồi (dữ liệu cũ) thì gửi lại ACK và bỏ qua
@@ -480,9 +480,8 @@ void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
     
   /* Kiểm tra segment trùng lặp trong bộ đệm nhận */
   if (ll_length(state->recv_segments) > 0) {
-    ll_node_t *check_node = NULL;
-    check_node = ll_front(state->recv_segments); // Lấy segment đầu tiên
-    if (check_node == NULL) return;
+    ll_node_t *check_node = ll_front(state->recv_segments); // Lấy segment đầu tiên
+    if (!check_node) return;
     ctcp_segment_t *check_seg = NULL;
 
     // Duyệt qua toàn bộ danh sách đã nhận
@@ -503,7 +502,7 @@ void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
   create_segment_and_send(state, NULL, 0, ACK, ack_num);
     
   /* Thêm segment vào bộ đệm nhận */
-  // 1. Tạo bản copy của segment để lưu trữ
+  // 1. Tạo bản copy của segment để lưu trữ do segment cấp tạo thời nên phải cấp phát động
   ctcp_segment_t *copy_seg = calloc(1, seg_len);
   memcpy(copy_seg, segment, seg_len);
 
