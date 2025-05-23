@@ -352,49 +352,61 @@ void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
 }
 
 /* Hàm xử lý khi nhận DATA segment */
-void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
-  uint16_t data_len = ntohs(segment->len) - sizeof(ctcp_segment_t);
-  uint32_t ack_num = ntohl(segment->seqno) + data_len;
-
-  // Segment tới hợp lệ (in-order)
-  if (state->ackno == ntohl(segment->seqno)) {
-    state->ackno = ack_num;
-    state->byte_recv += data_len;
-    create_segment_and_send(state, NULL, data_len, ACK, ack_num);
+/* Hàm xử lý khi nhận DATA segment */
+void data_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment)
+{
+  uint16_t seg_len = ntohs(segment->len);
+  uint32_t seq_num = ntohl(segment->seqno);
+  uint16_t data_len = seg_len - sizeof(ctcp_segment_t);
+  uint32_t ack_num = seq_num + data_len;
     
-    ctcp_segment_t *copy_segment = calloc(1, ntohs(segment->len));
-    memcpy(copy_segment, segment, ntohs(segment->len));
-    ll_add(state->recv_segments, copy_segment);
-    ctcp_output(state);
-  } else { // Trường hợp out-of-order
-    /* Các vấn đề xảy ra trong quá trình nhận Data transfer*/
-    // 1. Segment bắt đầu đúng chỗ (seqno hợp lệ) nhưng data trong segment quá dài => tràn recv_window
-    if ((data_len + state->byte_recv) > state->recv_window) return;
+  /* Kiểm tra điều kiện nhận segment */
+  // 1. Trong SR,DATA segment có data_len quá lớn tràn recv_window (bắt đầu đúng nhưng quá dài)
+  if (state->recv_window < (state->byte_recv + data_len)) return;
 
-    // 2. Segment bắt đầu sai chỗ (seqno hợp lệ chỉ nhận từ seqno thuộc [ackno, ackno + recv_window -1])
-    if (ntohl(segment->seqno) >= (state->ackno + state->recv_window)) return;
+  // 2. Trong SR, recv_window chỉ nhận 1 số lượng seg nhất định có seqno từ [ackno, ackno + recv_window - 1] (bắt đầu sai)
+  if (seq_num >= (state->ackno + state->recv_window)) return;
 
-    // 3. Segment trùng lặp (Đã gửi ACK cho Sender nhưng Sender không nhận được)
-    if (state->ackno >= ack_num) return;
-
-    // 4. Segment trùng lặp (Chưa gửi ACK cho Sender vì segment nằm trong buffer - không đến đúng thứ tự)
-    if (ll_length(state->recv_segments)) {
-      ll_node_t *check_node = ll_front(state->recv_segments);
-      while (check_node) {
-        ctcp_segment_t *check_seg = (ctcp_segment_t *)check_node->object; 
-        if (check_seg->seqno == segment->seqno) return;
-        check_node = check_node->next;
-      }
-    }
-
-    state->byte_recv += data_len;
-    create_segment_and_send(state, NULL, data_len, ACK, ack_num);
-
-    ctcp_segment_t *copy_segment = calloc(1, ntohs(segment->len));
-    memcpy(copy_segment, segment, ntohs(segment->len));
-    ll_add(state->recv_segments, copy_segment);
+  // 3. Nếu segment đã được ACK rồi (dữ liệu cũ) thì gửi lại ACK và bỏ qua
+  if (state->ackno >= ack_num) {
+    create_segment_and_send(state, NULL, 0, ACK, ack_num);
+    return;
   }
+    
+  /* Kiểm tra segment trùng lặp trong bộ đệm nhận */
+  if (ll_length(state->recv_segments) > 0) {
+    ll_node_t *check_node = ll_front(state->recv_segments); // Lấy segment đầu tiên
+    if (!check_node) return;
+    ctcp_segment_t *check_seg = NULL;
 
+    // Duyệt qua toàn bộ danh sách đã nhận
+    while (check_node != NULL) {
+      check_seg = (ctcp_segment_t*)(check_node->object);
+  
+      // Nếu phát hiện segment trùng seq_num thì bỏ qua
+      if (segment->seqno == check_seg->seqno) return;
+
+      check_node = check_node->next;
+    }
+  }
+    
+  // Cập nhật số byte đã nhận
+  state->byte_recv += data_len;
+
+  // Gửi ACK ngay lập tức cho dữ liệu nhận được
+  create_segment_and_send(state, NULL, 0, ACK, ack_num);
+    
+  /* Thêm segment vào bộ đệm nhận */
+  // 1. Tạo bản copy của segment để lưu trữ do segment cấp tạo thời nên phải cấp phát động
+  ctcp_segment_t *copy_seg = calloc(1, seg_len);
+  memcpy(copy_seg, segment, seg_len);
+
+  // 2. Thêm vào danh sách các segment đã nhận
+  ll_add(state->recv_segments, copy_seg);
+
+  // 3. Nếu segment này là segment mong đợi tiếp theo (in-order)
+  // thì gọi ctcp_output() để xử lý dữ liệu
+  if (state->ackno == ntohl(segment->seqno)) ctcp_output(state);
 }
 
 /* Hàm kiểm tra checksum của segment nhận được có đúng không */
