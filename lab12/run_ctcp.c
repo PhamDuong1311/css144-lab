@@ -207,7 +207,7 @@ void ctcp_read(ctcp_state_t *state) {
         create_segment_and_send(state, NULL, 0, FIN, state->ackno);
         state->byte_sent++; 
         return;
-      } else { // Tồn tại segment trong LL chưa ACK => length của LL != 0 => Gửi nốt ACk rồi gửi FIN ( xử lý lại chỗ này)
+      } else { 
         state->status = WAIT_SEND_FIN;
         create_segment_and_send(state, NULL, 0, FIN, state->ackno);
         state->byte_sent++; 

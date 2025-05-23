@@ -205,16 +205,48 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
     return;
   }
 
-  
+  uint32_t flags = ntohl(segment->flags);
+  if (flags & FIN) {
+    fin_seg_handle(state, segment);
+  } else if (flags & ACK) {
+    ack_seg_handle(state, segment);
+
+    if (ntohs(segment->len) > size_t(ctcp_segment_t)) data_seg_handle(state, segment);
+  } else if (flags == 0) {
+    data_seg_handle(state, segment);
+  }
+  free(segment);
 }
 
 
 void ctcp_output(ctcp_state_t *state) {
+  if (!state) return;
 
+  ll_node_t *node = ll_front(state->recv_segments);
+  while (node) {
+    ctcp_segment_t *seg = (ctcp_segment_t *) node->object;
+    if (state->ackno == ntohl(seg->seqno)) {
+      uint16_t data_len = ntohs(seg->len) - size_t(ctcp_segment_t);
+      size_t byte_write = conn_bufspace(state->conn);
+      size_t max_byte = data_len < byte_write ? data_len : byte_write;
+
+      if (max_byte == conn_output(state->conn, seg->data, max_byte)) {
+        state->byte_recv -= max_byte;
+        free(ll_remove(state->sent_segments, node));
+      }
+    } 
+    node = node->next;
+  }
 }
 
 void ctcp_timer() {
-
+  ctcp_state_t *state = state_list;
+  while (state) {
+    if (ll_length(state->sent_segments) == 0) {
+      retransmission_handle(state);
+    }
+    state = state->next;
+  }
 }
 
 /* Hàm tạo segment và gửi sang bên khác */
@@ -399,5 +431,6 @@ void retransmission_handle(ctcp_state_t *state) {
       }
     }
   }
+  gettimeofday(&(state->start_send_time), NULL);
 }
 
