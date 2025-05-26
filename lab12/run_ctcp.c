@@ -29,7 +29,6 @@
 #define CLOSE_WAIT      0x020 // Send FIN segment => LAST_ACK
 #define LAST_ACK        0x040 // Receive ACK segment => CLOSED
 #define CLOSING         0x080 // Receive ACK segment => TIME_WAIT
-#define WAIT_SEND_FIN	  0x100 // Receive ACK segment and send FIN segment => FIN_WAIT_2 or CLOSED
 
 
 /**
@@ -80,12 +79,6 @@ static ctcp_state_t *state_list;
 /* FIXME: Feel free to add as many helper functions as needed. Don't repeat
 code! Helper functions make the code clearer and cleaner. */
 
-/* timer to delay */
-int delay_keep;
-timer_t timer_id;
-void expired_func(union sigval sig_value);
-int init_timer(timer_t *t_id);
-void set_timer(timer_t t_id, int period_ms);
 
 /**
 * function creates segment and send with according flag
@@ -144,7 +137,6 @@ ctcp_state_t *ctcp_init(conn_t *conn, ctcp_config_t *cfg) {
 
   free(cfg);
     
-  init_timer(&timer_id);
     
   return state;
 }
@@ -174,7 +166,7 @@ void ctcp_read(ctcp_state_t *state) {
 // Kiểm tra kết nối còn tồn tại không
   if (!state) return;
 // Bỏ qua nếu kết nối đang ở trạng thái không thể gửi (đang đợi nhận segmnet)
-  if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK | WAIT_SEND_FIN) & state->status) return;
+  if ((BLOCK_FOR_ACK | FIN_WAIT_1 | FIN_WAIT_2 | LAST_ACK) & state->status) return;
 
 // Kiểm tra xem còn vùng trống trong swnd không, nếu không thì chuyển sang status BLOCK_FOR_ACK
   int bytes_left = state->sent_window - state->byte_sent;
@@ -207,12 +199,7 @@ void ctcp_read(ctcp_state_t *state) {
         create_segment_and_send(state, NULL, 0, FIN, state->ackno);
         state->byte_sent++; 
         return;
-      } else { 
-        state->status = WAIT_SEND_FIN;
-        create_segment_and_send(state, NULL, 0, FIN, state->ackno);
-        state->byte_sent++; 
-        return;
-      }
+      } 
     } else if (byte_read > 0) { // Còn byte đọc từ stdin => gửi DATA segment
       create_segment_and_send(state, state->buf_sent, byte_read, 0, state->ackno);
       state->byte_sent += byte_read;
@@ -380,10 +367,6 @@ void fin_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
     state->status = CLOSE_WAIT;
   }
 
-  // App đã gọi close(), chuẩn bị gửi FIN nhưng peer gửi FIN trước nên đóng lun
-  if (state->status & WAIT_SEND_FIN) { 
-    ctcp_destroy(state); // Hủy state kể cả chưa ACK hết data
-  }
 }
 
 /* Hàm xử lý ACK segment nhận được */
@@ -419,18 +402,10 @@ void ack_seg_handle(ctcp_state_t *state, ctcp_segment_t *segment) {
         else state->status = WAIT_INPUT;
       } else if (state->status == FIN_WAIT_1) { // status = FIN_WAIT_1
         state->status = FIN_WAIT_2;
-      } else if (state->status == WAIT_SEND_FIN) { // status = WAIT_SEND_FIN
-        create_segment_and_send(state, NULL, 0, FIN, state->ackno);
-        state->byte_sent++;
-        if (state->fin_recv_first == true) ctcp_destroy(state);
-        else state->status = FIN_WAIT_2;
       } else if (state->status == CLOSING) { // status = CLOSING
         state->status = TIME_WAIT;
         ctcp_destroy(state);
       } else if (state->status == LAST_ACK) { // status = LAST_ACK                
-        set_timer(timer_id, 2 * 5000);
-        while (delay_keep == 0);
-        delay_keep = 0;
         ctcp_destroy(state);
       }
     } else if (state->sent_window > state->byte_sent) { // Segment chưa ACK hết, 
@@ -551,44 +526,4 @@ void retransmission_handle(ctcp_state_t *state) {
     }
   }
   gettimeofday(&(state->start_send_time), NULL);
-}
-
-
-
-/* function handle when timer expired */
-void expired_func(union sigval sig_value)
-{
-  set_timer(timer_id, 0); /* stop timer */
-  delay_keep = 1;
-}
-
-/* funtion create timer to delay */
-int init_timer(timer_t *t_id)
-{
-  delay_keep = 0;
-    
-  // struct sigevent sig_event;
-  // sig_event.sigev_notify = SIGEV_THREAD;
-  // sig_event.sigev_notify_function = expired_func;
-
-  int res;
-  res = 1; // timer_create(CLOCK_REALTIME, &sig_event, t_id);
-  if (-1 == res)
-  {
-    //printf("fail to create timer!\n");
-  }
-  return res;
-}
-void set_timer(timer_t t_id, int period_ms)
-{
-  // struct itimerspec infor_timer = {.it_interval.tv_sec = period_ms/1000,
-  //                                .it_interval.tv_nsec = 0,
-  //                                .it_value.tv_sec = period_ms/1000,
-  //                                .it_value.tv_nsec = 0
-  //};
-  int res = 1; //timer_settime(t_id, 0, &infor_timer, NULL);
-  if (-1 == res)
-  {
-    //printf("fail to start/stop timer!");
-  }
 }
