@@ -200,10 +200,6 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
     return;
   }
 
-  if (state->first_seg) {
-    state->first_seg = 0;
-    state->seqno = ntohl(segment->ackno);
-  }
   uint32_t flags = ntohl(segment->flags);
   if (flags & FIN) {
     fin_seg_handle(state, segment);
