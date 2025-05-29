@@ -79,6 +79,80 @@ void sr_handlepacket(struct sr_instance* sr,
   printf("*** -> Received packet of length %d \n",len);
 
   /* fill in code here */
-
+  if (len < sizeof(sr_ethernet_hdr_t)) {
+    fprintf(stderr, "error: len of eth header");
+    return;
+  }
+  sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t* )packet;
+  if (eth_hdr->ether_type == ethertype_arp) {
+    handle_arp_packet(sr, packet, len, interface);
+  } else if (eth_hdr->ether_type == ethertype_ip) {
+    handle_ip_packet();
+  } else {
+    fprintf(stderr, "error: eth type");
+    return;
+  }
 }/* end sr_ForwardPacket */
 
+void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
+  sr_arp_hdr_t* arp_hdr = (sr_arp_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t);
+  if (ntohs(arp_hdr->ar_op) == arp_op_reply) {
+    struct sr_arpreq *req = sr_arpcache_insert(sr->cache, arp_hdr->ar_sha, ntohl(arp_hdr->ar_sip)); 
+    if (req) {
+      // Gửi tất cả các packet trong req->packets
+      struct sr_packet* pkt = req->packets;
+      while (pkt) {
+        sr_ethernet_hdr_t* eth_hdr_pkt = (sr_ethernet_hdr_t* )(pkt->buf);
+        sr_ip_hdr_t* ip_hdr_pkt = (sr_ip_hdr_t* )(pkt->buf + sizeof(sr_ethernet_hdr_t));
+        if (ip_hdr_pkt->ip_dst == ntohl(arp_hdr->ar_sip)) {
+          if (sr_send_packet(sr, pkt->buf, pkt->len, iface)) {
+            continue;
+          }
+        }
+        pkt = pkt->next;
+      }
+      sr_arpreq_destroy(sr->cache, req);
+    }
+  } else if (ntohs(arp_hdr->ar_op) == arp_op_request) {
+    struct sr_if* if = sr->if_list;
+    while (if) {
+      if (ntohl(arp_hdr->ar_tip) == if->ip) {
+        send_arp_reply()
+      }
+      if = if->next;
+    }
+  } else {
+    fprintf(stderr, "error opcode arp");
+    return;
+  }
+}
+
+// Xử lý nếu là IP packet
+void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
+  sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ip_hdr_t));
+  struct sr_if* if = sr_get_interface(sr, iface);
+
+  // Packet gửi tới chính router
+  if (if->ip == ntohl(ip_hdr->ip_dst) {
+    if (ip_hdr->ip_p == ip_protol_icmp) { // Nhận được ICMP echo request (ping)
+      // Gửi ICMP echo reply
+    } else {
+      // Gửi ICMP port unreachable
+    }
+  } else { // Packet cần forwarding tới next-hop
+
+  }
+}
+
+void send_arp_reply(struct sr_instance* sr, char* iface, uint8_t* t_mac, uint32_t t_ip) {
+  if ((sr->sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP)) < 0) {
+    fprintf(stderr, "failed socket arp");
+    return -1;
+  }
+
+  sr_ethernet_hdr_t* eth_hdr
+}
+
+void send_icmp() {
+
+} // về xem các loại gửi arp, icmp, raw eth, 

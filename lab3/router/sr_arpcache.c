@@ -105,6 +105,11 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
 {
     pthread_mutex_lock(&(cache->lock));
     
+    /* 
+    Duyệt LL ARP request, nếu tìm thấy request nào có IP giống IP từ ARP reply 
+    nhận được thì trỏ pointer vào nơi request đang trỏ tới nhưng chưa free request đó ngay,
+    bởi cần gửi các packet ở trong request đó trước
+    */
     struct sr_arpreq *req, *prev = NULL, *next = NULL; 
     for (req = cache->requests; req != NULL; req = req->next) {
         if (req->ip == ip) {            
@@ -122,9 +127,12 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
         prev = req;
     }
     
+    /*
+    Lưu IP-MAC vào ARP cache
+    */
     int i;
     for (i = 0; i < SR_ARPCACHE_SZ; i++) {
-        if (!(cache->entries[i].valid))
+        if (!(cache->entries[i].valid)) // duyệt tới cuối arp cache
             break;
     }
     
