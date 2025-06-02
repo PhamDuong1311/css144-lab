@@ -18,6 +18,14 @@
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
     /* Fill this in */
+    struct sr_arpreq *req = sr->cache.requests;
+    struct sr_arpreq *next;
+
+    while (req) {
+        next = req->next;
+        handle_arpreq(sr, req);
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
@@ -132,7 +140,7 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
     */
     int i;
     for (i = 0; i < SR_ARPCACHE_SZ; i++) {
-        if (!(cache->entries[i].valid)) // duyệt tới cuối arp cache
+        if (!(cache->entries[i].valid)) 
             break;
     }
     

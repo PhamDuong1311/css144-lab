@@ -1,5 +1,8 @@
 {
     "files.associations": {
-        "sr_arpcache.h": "c"
+        "sr_arpcache.h": "c",
+        "sr_router.h": "c",
+        "assert.h": "c",
+        "inet.h": "c"
     }
 }
