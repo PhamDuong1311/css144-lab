@@ -29,7 +29,6 @@ void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, cha
 void send_icmp_echo_reply(struct sr_instance* sr, uint8_t* recv_packet, uint32_t recv_len, char* iface_name);
 void send_icmp_error(struct sr_instance* sr, uint8_t* recv_packet, uint32_t len, char* iface_name, uint8_t type, uint8_t code);
 struct sr_rt* get_match_rt_entry(struct sr_instance* sr, uint32_t dest_ip);
-void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
 void send_arp_reply(struct sr_instance* sr, uint32_t target_ip, uint8_t* target_mac, char* iface);
 void send_arp_request(struct sr_instance* sr, uint32_t target_ip, char* iface);
 int is_valid_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len);
@@ -145,7 +144,7 @@ void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, ch
 /* Hàm xử lý IP packet */
 void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
   /* Check packet có hợp lệ không */
-  if (!is_valid_packet) return;
+  if (!is_valid_packet(sr, packet, len)) return;
 
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
   struct sr_if* ifa = sr_get_interface(sr, iface);
@@ -154,7 +153,7 @@ void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, cha
   if (ifa->ip == ntohl(ip_hdr->ip_dst)) {
     if (ip_hdr->ip_p == ip_protocol_icmp) { /* Packet là ICMP */
       /* Kiểm tra nếu nhận được ICMP echo request */
-      if (is_icmp_echo_request) {
+      if (is_icmp_echo_request(sr, packet, len)) {
         /* Gửi ICMP echo reply */
         send_icmp_echo_reply(sr, packet, len, iface);
       }

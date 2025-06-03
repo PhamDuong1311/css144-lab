@@ -75,3 +75,5 @@ void sr_set_ether_addr(struct sr_instance* , const unsigned char* );
 void sr_print_if_list(struct sr_instance* );
 
 #endif /* SR_ROUTER_H */
+
+void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
