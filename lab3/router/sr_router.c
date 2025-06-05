@@ -120,11 +120,13 @@ void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, ch
         sr_ip_hdr_t* ip_hdr_pkt = (sr_ip_hdr_t* )(pkt->buf + sizeof(sr_ethernet_hdr_t));
         struct sr_if* out_iface = sr_get_interface(sr, pkt->iface);
         if (ntohl(ip_hdr_pkt->ip_dst) == ntohl(arp_hdr->ar_sip)) {
+          ip_hdr_pkt->ip_src = out_iface->ip;
           memcpy(eth_hdr_pkt->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
           memcpy(eth_hdr_pkt->ether_shost, out_iface->addr, ETHER_ADDR_LEN); 
           fprintf(stderr, "Send packet in ARP req queue\n");
-
           sr_send_packet(sr, pkt->buf, pkt->len, iface);
+          fprintf(stderr, "stop send all packet in ARP req\n");
+
         }
         pkt = next_pkt;
       }
@@ -153,26 +155,32 @@ void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, cha
 
   /* if (!is_valid_packet(sr, packet, len)) return;
   fprintf(stderr, "IP PACKET OK\n"); */
-
+  sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t* )packet;
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
-  struct sr_if* ifa = sr_get_interface(sr, iface);
-  /* Trường hợp packet có đích chỉ tới router */
-  if (ifa->ip == ip_hdr->ip_dst) {
-    fprintf(stderr, "Dst is router\n");
+  sr_arpcache_insert(&(sr->cache), eth_hdr->ether_shost, ip_hdr->ip_src);
+  int is_if_rt = 0;
+  struct sr_if* ifaces = sr->if_list;
+  while (ifaces) {
+    /* Trường hợp packet có đích chỉ tới router */
+    if (ifaces->ip == ip_hdr->ip_dst) {
+      fprintf(stderr, "Dst is router\n");
+      is_if_rt = 1;
+      if (ip_hdr->ip_p == ip_protocol_icmp) { /* Packet là ICMP */
+        /* Kiểm tra nếu nhận được ICMP echo request */
+        if (is_icmp_echo_request(sr, packet, len)) {
 
-    if (ip_hdr->ip_p == ip_protocol_icmp) { /* Packet là ICMP */
-      /* Kiểm tra nếu nhận được ICMP echo request */
-      if (is_icmp_echo_request(sr, packet, len)) {
-
-        /* Gửi ICMP echo reply */
-        send_icmp_echo_reply(sr, packet, len, iface);
+          /* Gửi ICMP echo reply */
+          send_icmp_echo_reply(sr, packet, len, iface);
+        }
+      } else { /* Packet là TCP|UDP */
+        /* Gửi ICMP port unreachable */
+        send_icmp_error(sr, packet, len, iface, 3, 3); 
+        return;
       }
-    } else { /* Packet là TCP|UDP */
-      /* Gửi ICMP port unreachable */
-      send_icmp_error(sr, packet, len, iface, 3, 3); 
-      return;
     }
-  } else { /* Trường hợp packet tới router cần forward tiếp tới next-hop */
+    ifaces = ifaces->next;
+  }
+  if (is_if_rt == 0) { /* Trường hợp packet tới router cần forward tiếp tới next-hop */
       fprintf(stderr, "Dst is next-hop\n");
       /* Tính là TTL và cksum */
       ip_hdr->ip_ttl--;
@@ -312,29 +320,35 @@ void send_icmp_error(struct sr_instance* sr, uint8_t* recv_packet, uint32_t len,
   sr_send_packet(sr, send_packet, send_len, iface_name);
 }
 
-/* Lấy entry phù hợp nhất (LPM) trong routing table*/
-struct sr_rt* get_match_rt_entry(struct sr_instance* sr, uint32_t dest_ip) {
-  struct sr_rt* rt_entry = sr->routing_table;
-  struct sr_rt* best_rt_entry = NULL;
-  uint32_t best_mask_len = 0;
-  while (rt_entry) {
-    uint32_t mask_entry = ntohl(rt_entry->mask.s_addr);
-    uint32_t dest_entry = ntohl(rt_entry->dest.s_addr);
 
-    /* LPM */
-    if ((ntohl(dest_ip) & mask_entry) == (dest_entry & mask_entry)) {
-      uint32_t mask_len = __builtin_popcount(mask_entry);
 
-      if (mask_len > best_mask_len) {
-        best_mask_len = mask_len;
-        best_rt_entry = rt_entry;
-      }
+struct sr_rt* get_match_rt_entry(struct sr_instance* sr, uint32_t ip_dst) {
+    struct sr_rt* current_rt_entry = sr->routing_table;
+    struct sr_rt* best_match_entry = NULL;
+    uint32_t longest_mask_match = 0; 
+
+    while (current_rt_entry) {
+        uint32_t current_dest = current_rt_entry->dest.s_addr;
+        uint32_t current_mask = current_rt_entry->mask.s_addr;
+
+
+        if ((ip_dst & current_mask) == (current_dest & current_mask)) {
+
+            if (current_mask > longest_mask_match) {
+                best_match_entry = current_rt_entry;
+                longest_mask_match = current_mask;
+            }
+            else if (best_match_entry == NULL && current_mask == 0x00000000) {
+                best_match_entry = current_rt_entry;
+                longest_mask_match = current_mask;
+            }
+        }
+        current_rt_entry = current_rt_entry->next;
     }
-    rt_entry = rt_entry->next;
-  }
 
-  return best_rt_entry;
+    return best_match_entry;
 }
+
 
 void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req) {
   time_t now = time(NULL);
