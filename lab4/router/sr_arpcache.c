@@ -18,6 +18,14 @@
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
     /* Fill this in */
+    struct sr_arpreq *req = sr->cache.requests;
+    struct sr_arpreq *next;
+
+    while (req) {
+        next = req->next;
+        handle_arpreq(sr, req);
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
@@ -105,6 +113,11 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
 {
     pthread_mutex_lock(&(cache->lock));
     
+    /* 
+    Duyệt LL ARP request, nếu tìm thấy request nào có IP giống IP từ ARP reply 
+    nhận được thì trỏ pointer vào nơi request đang trỏ tới nhưng chưa free request đó ngay,
+    bởi cần gửi các packet ở trong request đó trước
+    */
     struct sr_arpreq *req, *prev = NULL, *next = NULL; 
     for (req = cache->requests; req != NULL; req = req->next) {
         if (req->ip == ip) {            
@@ -122,9 +135,12 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
         prev = req;
     }
     
+    /*
+    Lưu IP-MAC vào ARP cache
+    */
     int i;
     for (i = 0; i < SR_ARPCACHE_SZ; i++) {
-        if (!(cache->entries[i].valid))
+        if (!(cache->entries[i].valid)) 
             break;
     }
     
@@ -182,16 +198,24 @@ void sr_arpreq_destroy(struct sr_arpcache *cache, struct sr_arpreq *entry) {
 
 /* Prints out the ARP table. */
 void sr_arpcache_dump(struct sr_arpcache *cache) {
-    fprintf(stderr, "\nMAC            IP         ADDED                      VALID\n");
-    fprintf(stderr, "-----------------------------------------------------------\n");
+    fprintf(stderr, "\nMAC              IP             ADDED                     VALID\n");
+    fprintf(stderr, "---------------------------------------------------------------\n");
     
     int i;
-    for (i = 0; i < SR_ARPCACHE_SZ; i++) {
+    for (i = 0; i < 3; i++) {
         struct sr_arpentry *cur = &(cache->entries[i]);
-        unsigned char *mac = cur->mac;
-        fprintf(stderr, "%.1x%.1x%.1x%.1x%.1x%.1x   %.8x   %.24s   %d\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ntohl(cur->ip), ctime(&(cur->added)), cur->valid);
+        char ip_str[INET_ADDRSTRLEN];
+
+        struct in_addr ip_addr;
+        ip_addr.s_addr = cur->ip;
+        inet_ntop(AF_INET, &ip_addr, ip_str, sizeof(ip_str));
+
+        fprintf(stderr, "%02x:%02x:%02x:%02x:%02x:%02x   %-15s %-24s %d\n",
+                cur->mac[0], cur->mac[1], cur->mac[2],
+                cur->mac[3], cur->mac[4], cur->mac[5],
+                ip_str, ctime(&(cur->added)), cur->valid);
     }
-    
+
     fprintf(stderr, "\n");
 }
 

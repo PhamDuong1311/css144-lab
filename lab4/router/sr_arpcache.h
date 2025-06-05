@@ -16,7 +16,7 @@
        free entry
    else:
        req = arpcache_queuereq(next_hop_ip, packet, len)
-       handle_arpreq(req)
+       handle_arpreq(req) 
 
    --
 
@@ -74,6 +74,7 @@
 #define SR_ARPCACHE_SZ    100  
 #define SR_ARPCACHE_TO    15.0
 
+/* Cấu trúc packet đang đợi nhận ARP reply để lấy MAC rồi gửi frame tới next-top */
 struct sr_packet {
     uint8_t *buf;               /* A raw Ethernet frame, presumably with the dest MAC empty */
     unsigned int len;           /* Length of raw Ethernet frame */
@@ -81,13 +82,7 @@ struct sr_packet {
     struct sr_packet *next;
 };
 
-struct sr_arpentry {
-    unsigned char mac[6]; 
-    uint32_t ip;                /* IP addr in network byte order */
-    time_t added;         
-    int valid;
-};
-
+/* Cấu trúc cho 1 ARP request đang đợi phản hồi */
 struct sr_arpreq {
     uint32_t ip;
     time_t sent;                /* Last time this ARP request was sent. You 
@@ -99,40 +94,47 @@ struct sr_arpreq {
     struct sr_arpreq *next;
 };
 
+/* Cấu trúc 1 entry ánh xạ IP-MAC trong ARP cache */
+struct sr_arpentry {
+    unsigned char mac[6]; 
+    uint32_t ip;                /* IP addr in network byte order */
+    time_t added;         
+    int valid;
+};
+
+/* Cấu trúc cho toàn bộ ARP cache và ARP request queue */
 struct sr_arpcache {
     struct sr_arpentry entries[SR_ARPCACHE_SZ];
     struct sr_arpreq *requests;
-    pthread_mutex_t lock;
-    pthread_mutexattr_t attr;
+    pthread_mutex_t lock; /* ARP cache là vùng dữ liệu dùng chung của cac thread nên phải dùng khóa để ngăn chặn nhiều thread cùng truy cập, tránh xung đột dữ liệu */
+    pthread_mutexattr_t attr; 
 };
 
-/* Checks if an IP->MAC mapping is in the cache. IP is in network byte order. 
-   You must free the returned structure if it is not NULL. */
+/* Nếu packet cần forward tới next-hop, gọi sr_arpcache_lookup() để tra cứu IP trong ARP cache (lấy MAC để forward) */
 struct sr_arpentry *sr_arpcache_lookup(struct sr_arpcache *cache, uint32_t ip);
 
-/* Adds an ARP request to the ARP request queue. If the request is already on
-   the queue, adds the packet to the linked list of packets for this sr_arpreq
-   that corresponds to this ARP request. The packet argument should not be
-   freed by the caller.
-
-   A pointer to the ARP request is returned; it should not be freed. The caller
-   can remove the ARP request from the queue by calling sr_arpreq_destroy. */
+/* Nếu packet có IP không được tìm thấy trong ARP cache, gọi sr_arpcache_queuereq() để packet được thêm vào ARP request queue */
 struct sr_arpreq *sr_arpcache_queuereq(struct sr_arpcache *cache,
                          uint32_t ip,
                          uint8_t *packet,               /* borrowed */
                          unsigned int packet_len,
                          char *iface);
 
-/* This method performs two functions:
-   1) Looks up this IP in the request queue. If it is found, returns a pointer
-      to the sr_arpreq with this IP. Otherwise, returns NULL.
-   2) Inserts this IP to MAC mapping in the cache, and marks it valid. */
+struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
+                            unsigned char *mac,
+                            uint32_t ip);                         
+/* Thiếu hàm gửi ARP request
+
+ Sau khi nhận được ARP reply (có MAC mong muốn), gọi sr_arpcache_insert() để:
+  - Gỡ ARP request khỏi queue
+  - Lưu IP-MAC vào ARP cache
+  - Trả về req đề gửi các packet bị trì hoãn trước đó chứ không free ngay (free sau)
 struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
                                      unsigned char *mac,
                                      uint32_t ip);
 
-/* Frees all memory associated with this arp request entry. If this arp request
-   entry is on the arp request queue, it is removed from the queue. */
+Frees all memory associated with this arp request entry. If this arp request
+entry is on the arp request queue, it is removed from the queue. */
 void sr_arpreq_destroy(struct sr_arpcache *cache, struct sr_arpreq *entry);
 
 /* Prints out the ARP table. */
