@@ -14,7 +14,11 @@ typedef enum {
 
 struct sr_nat_connection {
   /* add TCP connection state data members here */
-
+  uint32_t ip_src;
+  uint32_t ip_dst;
+  uint16_t port_src;
+  uint16_t port_dst;
+  time_t last_active;
   struct sr_nat_connection *next;
 };
 
@@ -32,7 +36,10 @@ struct sr_nat_mapping {
 struct sr_nat {
   /* add any fields here */
   struct sr_nat_mapping *mappings;
-
+  uint32_t ext_eth;
+  uint32_t int_eth;
+  uint16_t id_incre;
+  uint16_t port_incre;
   /* threading */
   pthread_mutex_t lock;
   pthread_mutexattr_t attr;
@@ -41,7 +48,7 @@ struct sr_nat {
 };
 
 
-int   sr_nat_init(struct sr_nat *nat);     /* Initializes the nat */
+int   sr_nat_init(struct sr_instance* sr, struct sr_nat *nat);     /* Initializes the nat */
 int   sr_nat_destroy(struct sr_nat *nat);  /* Destroys the nat (free memory) */
 void *sr_nat_timeout(void *nat_ptr);  /* Periodic Timout */
 
