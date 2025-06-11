@@ -162,7 +162,6 @@ struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   } else {
     mapping->ip_int = ip_int;
     mapping->aux_int = aux_int;
-    mapping->ip_ext = nat->ext_eth;
     mapping->last_updated = time(NULL);
     mapping->type = type;
     mapping->conns = NULL;
@@ -203,6 +202,7 @@ struct sr_nat_connection* sr_nat_insert_connection(struct sr_nat_mapping* mappin
     conn->port_src = port_src;
     conn->port_dst = port_dst;
     conn->last_active = time(NULL);
+    conn->state = nat_conn_transitory;
 
     conn->next = mapping->conns;
     mapping->conns = conn;
@@ -227,3 +227,4 @@ struct sr_nat_connection* sr_nat_lookup_connection(struct sr_nat_mapping* mappin
 
   return NULL;
 }
+

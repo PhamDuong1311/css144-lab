@@ -22,6 +22,7 @@
 #include "sr_protocol.h"
 #include "sr_arpcache.h"
 #include "sr_utils.h"
+#include "sr_nat.h"
 
 /* Bonus */
 void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface);
@@ -462,4 +463,45 @@ int is_icmp_echo_request(struct sr_instance* sr, uint8_t* packet, uint32_t len) 
     return 0;
   }
   return 1;
+}
+
+
+
+
+/* Bonus for NAT */
+void sr_nat_handle_icmp(struct instance* sr, struct sr_nat* nat, uint8_t* packet, uint32_t len, char* iface) {
+  sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
+  sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+  struct sr_if* iface_ext_info = sr_get_interface(sr, "sw0-eth2");
+  struct sr_if* iface_int_info = sr_get_interface(sr, "sw0-eth1");
+  struct sr_nat_mapping* mapping = NULL;
+  if (strcmp(iface, "sw0-eth1") == 0) {
+    mapping = sr_nat_insert_mapping(nat, ip_hdr->ip_src, icmp_hdr->icmp_id, nat_mapping_icmp);
+
+    ip_hdr->ip_src = iface_ext_info->ip;
+    icmp_hdr->icmp_id = mapping->aux_ext;
+
+    ip_hdr->ip_sum = 0;
+    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+    icmp_hdr->icmp_sum = 0;
+    icmp_hdr->icmp_sum = cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
+  } else {
+    mapping = sr_nat_lookup_external(nat, icmp_hdr->icmp_id, nat_mapping_icmp);
+    if (mapping) {
+      ip_hdr->ip_dst = mapping->ip_int;
+      icmp_hdr->icmp_id = mapping->aux_int;
+
+      ip_hdr->ip_sum = 0;
+      ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+      icmp_hdr->icmp_sum = 0;
+      icmp_hdr->icmp_sum = cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
+    } else return; /* drop packet */
+  }
+
+}
+
+void sr_nat_handle_tcp (struct instance* sr, struct sr_nat* nat, uint8_t* packet, uint32_t len, char* iface) {
+  sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
+  
+
 }

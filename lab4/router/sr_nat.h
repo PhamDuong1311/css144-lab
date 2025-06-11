@@ -13,8 +13,8 @@ typedef enum {
 } sr_nat_mapping_type;
 
 typedef enum {
-  nat_conn_established;
-  nat_conn_transitory;
+  nat_conn_established,
+  nat_conn_transitory
 } sr_nat_conn_state;
 
 struct sr_nat_connection {
@@ -42,13 +42,11 @@ struct sr_nat_mapping {
 struct sr_nat {
   /* add any fields here */
   struct sr_nat_mapping *mappings;
-  uint32_t ext_eth;
-  uint32_t int_eth;
   uint16_t id_incre;
   uint16_t port_incre;
   int icmp_timeout;
-  int tcp_estab_timeout;
-  int tcp_trans_timeout;
+  int tcp_established_timeout;
+  int tcp_transitory_timeout;
   /* threading */
   pthread_mutex_t lock;
   pthread_mutexattr_t attr;
@@ -76,5 +74,7 @@ struct sr_nat_mapping *sr_nat_lookup_internal(struct sr_nat *nat,
 struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   uint32_t ip_int, uint16_t aux_int, sr_nat_mapping_type type );
 
+struct sr_nat_connection* sr_nat_insert_connection(struct sr_nat_mapping* mapping, uint32_t ip_src, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst);
+struct sr_nat_connection* sr_nat_lookup_connection(struct sr_nat_mapping* mapping, uint32_t ip_src, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst);
 
 #endif
