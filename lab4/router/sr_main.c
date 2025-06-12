@@ -32,6 +32,7 @@
 #include "sr_dumper.h"
 #include "sr_router.h"
 #include "sr_rt.h"
+#include "sr_nat.h"
 
 extern char* optarg;
 
@@ -65,6 +66,11 @@ int main(int argc, char **argv)
     unsigned int port = DEFAULT_PORT;
     unsigned int topo = DEFAULT_TOPO;
     char *logfile = 0;
+    int nat_enabled = 0;
+    unsigned int icmp_timeout = 60;
+    unsigned int tcp_established_timeout = 7440;
+    unsigned int tcp_transitory_timeout = 300;
+
     struct sr_instance sr;
 
     printf("Using %s\n", VERSION_INFO);
@@ -131,6 +137,7 @@ int main(int argc, char **argv)
     sr.topo_id = topo;
     strncpy(sr.host,host,32);
 
+
     if(! user )
     { sr_set_user(&sr); }
     else
@@ -169,6 +176,15 @@ int main(int argc, char **argv)
       sr_load_rt_wrap(&sr, rtable);
     }
 
+    sr.nat = malloc(sizeof(struct sr_nat));
+    sr_nat_init(sr.nat);
+
+    if (nat_enabled) {
+        sr.nat->nat_enabled = nat_enabled;
+        sr.nat->icmp_timeout = icmp_timeout;
+        sr.nat->tcp_established_timeout = tcp_established_timeout;
+        sr.nat->tcp_transitory_timeout = tcp_transitory_timeout;
+    }
     /* call router init (for arp subsystem etc.) */
     sr_init(&sr);
 
@@ -262,6 +278,7 @@ static void sr_init_instance(struct sr_instance* sr)
     sr->if_list = 0;
     sr->routing_table = 0;
     sr->logfile = 0;
+    sr->nat = 0;
 } /* -- sr_init_instance -- */
 
 /*-----------------------------------------------------------------------------

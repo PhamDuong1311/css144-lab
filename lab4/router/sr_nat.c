@@ -3,8 +3,11 @@
 #include <assert.h>
 #include "sr_nat.h"
 #include <unistd.h>
+#include <stdlib.h> 
+#include <string.h> 
+#include <stdio.h>
 
-int sr_nat_init(struct sr_instance* sr, struct sr_nat *nat) { /* Initializes the nat */
+int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   assert(nat);
 
@@ -25,18 +28,16 @@ int sr_nat_init(struct sr_instance* sr, struct sr_nat *nat) { /* Initializes the
 
   nat->mappings = NULL;
   /* Initialize any variables here */
-  struct sr_if* int_eth_info = sr_get_interface(sr, "sw0-eth1");
-  struct sr_if* ext_eth_info = sr_get_interface(sr, "sw0-eth2");
-  if (!int_eth_info || !ext_eth_info) {
-    pthread_mutex_destroy(&(nat->lock));
-    pthread_mutexattr_destroy(&(nat->attr));
-    return NULL;
-  }
-  nat->int_eth = int_eth_info->ip;
-  nat->ext_eth = ext_eth_info->ip;
+
+  nat->nat_enabled = 0;
+
 
   nat->id_incre = 0;
   nat->port_incre = 1024;
+
+  nat->icmp_timeout = 60;
+  nat->tcp_established_timeout = 7440;
+  nat->tcp_transitory_timeout = 300;
 
   return success;
 }
@@ -75,9 +76,9 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
     sleep(1.0);
     pthread_mutex_lock(&(nat->lock));
 
-    time_t curtime = time(NULL);
+    /* time_t curtime = time(NULL); 
 
-    /* handle periodic tasks here */
+    handle periodic tasks here */
 
     pthread_mutex_unlock(&(nat->lock));
   }
@@ -119,24 +120,17 @@ struct sr_nat_mapping *sr_nat_lookup_internal(struct sr_nat *nat,
   pthread_mutex_lock(&(nat->lock));
 
   /* handle lookup here, malloc and assign to copy. */
-  struct sr_nat_mapping *copy = NULL;
   struct sr_nat_mapping *nat_entry = nat->mappings;
   while (nat_entry) {
     if (nat_entry->ip_int == ip_int && nat_entry->aux_int == aux_int && nat_entry->type == type) {
-      copy = (struct sr_nat_mapping* )malloc(sizeof(struct sr_nat_mapping));
-      if (!copy) {
-        pthread_mutex_destroy(&(nat->lock));
-        return NULL;
-      }
-      memcpy(copy, nat_entry, sizeof(struct sr_nat_mapping));
-      copy->next = NULL;
-      break;
+
+      pthread_mutex_unlock(&(nat->lock));
+      return nat_entry;
     }
     nat_entry = nat_entry->next;
   }
-
   pthread_mutex_unlock(&(nat->lock));
-  return copy;
+  return NULL;
 }
 
 /* Insert a new mapping into the nat's mapping table.
@@ -145,46 +139,51 @@ struct sr_nat_mapping *sr_nat_lookup_internal(struct sr_nat *nat,
 struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   uint32_t ip_int, uint16_t aux_int, sr_nat_mapping_type type ) {
 
-  pthread_mutex_lock(&(nat->lock));
-
   /* handle insert here, create a mapping, and then return a copy of it */
-  struct sr_nat_mapping *mapping = NULL;
-
   struct sr_nat_mapping *copy_mapping = (struct sr_nat_mapping* )malloc(sizeof(struct sr_nat_mapping));
   if (!copy_mapping) {
     pthread_mutex_destroy(&(nat->lock));
     return NULL;
   }
 
-  mapping = sr_nat_lookup_internal(nat, ip_int, aux_int, type);
+  struct sr_nat_mapping *mapping = sr_nat_lookup_internal(nat, ip_int, aux_int, type);
   if (mapping) {
+    pthread_mutex_lock(&(nat->lock));
     mapping->last_updated = time(NULL);
+    pthread_mutex_unlock(&(nat->lock));
+
+    /* Đây là kỹ thuật giúp tránh thay đổi node trong LL khi trả về, trả về 1 node copy mà không trỏ về đâu (next = NULL) */
+    memcpy(copy_mapping, mapping, sizeof(struct sr_nat_mapping));
+    copy_mapping->next = NULL;
+    return copy_mapping;
   } else {
-    mapping->ip_int = ip_int;
-    mapping->aux_int = aux_int;
-    mapping->last_updated = time(NULL);
-    mapping->type = type;
-    mapping->conns = NULL;
+    struct sr_nat_mapping* new_mapping = (struct sr_nat_mapping* )malloc(sizeof(struct sr_nat_mapping));
+    new_mapping->ip_int = ip_int;
+    new_mapping->aux_int = aux_int;
+    new_mapping->last_updated = time(NULL);
+    new_mapping->type = type;
+    new_mapping->conns = NULL;
     
+    pthread_mutex_lock(&(nat->lock)); /* Cần khoá lại vì id_incre và port_incre dùng chung */
     if (type == nat_mapping_icmp) {
-      mapping->aux_ext = (nat->id_incre)++;
+      new_mapping->aux_ext = (nat->id_incre)++;
     } else if (type == nat_mapping_tcp) {
-      mapping->aux_ext = (nat->port_incre)++;
+      new_mapping->aux_ext = (nat->port_incre)++;
       if (nat->port_incre > 65535) {
         nat->port_incre = 1024;
       }
     }
 
-    mapping->next = nat->mappings;
-    nat->mappings = mapping;
+    new_mapping->next = nat->mappings;
+    nat->mappings = new_mapping;
+    
+    
+    pthread_mutex_unlock(&(nat->lock));
+    /* Đây là kỹ thuật giúp tránh thay đổi node trong LL khi trả về, trả về 1 node copy mà không trỏ về đâu (next = NULL) */
+    memcpy(copy_mapping, new_mapping, sizeof(struct sr_nat_mapping));
+    copy_mapping->next = NULL;
+    return copy_mapping;
   }
-
-  /* Đây là kỹ thuật giúp tránh thay đổi node trong LL khi trả về, trả về 1 node copy mà không trỏ về đâu (next = NULL) */
-  memcpy(copy_mapping, mapping, sizeof(struct sr_nat_mapping));
-  copy_mapping->next = NULL;
-
-  pthread_mutex_unlock(&(nat->lock));
-  return copy_mapping;
 }
 
 struct sr_nat_connection* sr_nat_insert_connection(struct sr_nat_mapping* mapping, uint32_t ip_src, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst) {
@@ -216,7 +215,7 @@ struct sr_nat_connection* sr_nat_insert_connection(struct sr_nat_mapping* mappin
 struct sr_nat_connection* sr_nat_lookup_connection(struct sr_nat_mapping* mapping, uint32_t ip_src, uint32_t ip_dst, uint16_t port_src, uint16_t port_dst) {
   struct sr_nat_connection* conn = mapping->conns;
   while (conn) {
-    if (conn->ip_src == ip_src && conn->ip_dst == ip_dst && conn->port_src == port_src && conn->port_dst = port_dst) {
+    if (conn->ip_src == ip_src && conn->ip_dst == ip_dst && conn->port_src == port_src && conn->port_dst == port_dst) {
       struct sr_nat_connection* copy_conn = (struct sr_nat_connection* )malloc(sizeof(struct sr_nat_connection));
       memcpy(copy_conn, conn, sizeof(struct sr_nat_connection));
       copy_conn->next = NULL;

@@ -34,6 +34,8 @@ void send_arp_reply(struct sr_instance* sr, uint32_t target_ip, uint8_t* target_
 void send_arp_request(struct sr_instance* sr, uint32_t target_ip, char* iface);
 int is_valid_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len);
 int is_icmp_echo_request(struct sr_instance* sr, uint8_t* packet, uint32_t len);
+void sr_nat_handle_tcp (struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface);
+void sr_nat_handle_icmp (struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface);
 
 /*---------------------------------------------------------------------
  * Method: sr_init(void)
@@ -96,8 +98,10 @@ void sr_handlepacket(struct sr_instance* sr,
   }
   sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t* )packet;
   if (ntohs(eth_hdr->ether_type) == ethertype_arp) { /* Nhận được ARP packet */
+    fprintf(stderr, "handle arp -> ");
     handle_arp_packet(sr, packet, len, interface);
   } else if (ntohs(eth_hdr->ether_type) == ethertype_ip) { /* Nhận được IP packet */
+    fprintf(stderr, "handle ip -> ");
     handle_ip_packet(sr, packet, len, interface);
   } else { /* Bỏ qua nếu khác loại */
     fprintf(stderr, "error: eth type");
@@ -126,8 +130,6 @@ void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, ch
           memcpy(eth_hdr_pkt->ether_shost, out_iface->addr, ETHER_ADDR_LEN); 
           fprintf(stderr, "Send packet in ARP req queue\n");
           sr_send_packet(sr, pkt->buf, pkt->len, iface);
-          fprintf(stderr, "stop send all packet in ARP req\n");
-
         }
         pkt = next_pkt;
       }
@@ -152,83 +154,23 @@ void handle_arp_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, ch
 
 /* Hàm xử lý IP packet */
 void handle_ip_packet(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
-  /* Check packet có hợp lệ không */
-
-  /* if (!is_valid_packet(sr, packet, len)) return;
-  fprintf(stderr, "IP PACKET OK\n"); */
   sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t* )packet;
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
   sr_arpcache_insert(&(sr->cache), eth_hdr->ether_shost, ip_hdr->ip_src);
-  int is_if_rt = 0;
-  struct sr_if* ifaces = sr->if_list;
-  while (ifaces) {
-    /* Trường hợp packet có đích chỉ tới router */
-    if (ifaces->ip == ip_hdr->ip_dst) {
-      fprintf(stderr, "Dst is router\n");
-      is_if_rt = 1;
-      if (ip_hdr->ip_p == ip_protocol_icmp) { /* Packet là ICMP */
-        /* Kiểm tra nếu nhận được ICMP echo request */
-        if (is_icmp_echo_request(sr, packet, len)) {
 
-          /* Gửi ICMP echo reply */
-          send_icmp_echo_reply(sr, packet, len, iface);
-        }
-      } else { /* Packet là TCP|UDP */
-        /* Gửi ICMP port unreachable */
-        send_icmp_error(sr, packet, len, iface, 3, 3); 
-        return;
-      }
-    }
-    ifaces = ifaces->next;
-  }
-  if (is_if_rt == 0) { /* Trường hợp packet tới router cần forward tiếp tới next-hop */
-      fprintf(stderr, "Dst is next-hop\n");
-      /* Tính là TTL và cksum */
-      ip_hdr->ip_ttl--;
-      ip_hdr->ip_sum = 0;
-      ip_hdr->ip_sum = cksum((uint16_t* )ip_hdr, sizeof(sr_ip_hdr_t));
-      if (ip_hdr->ip_ttl <= 0) { /* Hết TTL */
-        fprintf(stderr, "time exceeded\n");
-        /* Gửi ICMP time exceeded */
-        send_icmp_error(sr, packet, len, iface, 11, 0);
-        return;
-      } else { /* Chưa hết TTL */
-        if (sr_load_rt(sr, "rtable") != 0) return;
-        struct sr_rt* rt_entry = get_match_rt_entry(sr, ip_hdr->ip_dst);
-        /* Kiểm tra có entry phù hợp trong routing table không */
-        if (!rt_entry) {
-          fprintf(stderr, "fail to find rtable\n");
-          /* Gửi ICMP destination network unreachable */
-          send_icmp_error(sr, packet, len, iface, 3, 0);
-          return;
-        } else { /* Tìm thất entry phù hợp trong routing table */
-          fprintf(stderr, "success to find in rtable\n");
-          struct sr_arpentry* arp_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
-          if (arp_entry) { /* Kiểm tra có entry phù hợp trong ARP cache không*/
-            fprintf(stderr, "exist match ARP cache entry\n");
-            sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
-            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
-            memcpy(eth_hdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
-            memcpy(eth_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
-            fprintf(stderr, "Send frame to next-hop\n");
-            /* Gửi cả frame tới next-hop */
-            sr_send_packet(sr, packet, len, iface_info->name);
-            free(arp_entry);
-          } else { /* Không có entry phù hợp trong ARP cache */
-            fprintf(stderr, "don't exist match ARP cache entry\n");
-            /* Gửi ARP request */
-            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
-            struct sr_arpreq* req = sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, iface_info->name);
-            handle_arpreq(sr, req);
-          } 
-        }
-      }
+  if (ip_hdr->ip_p == ip_protocol_icmp) {
+    fprintf(stderr, "handle icmp ->");
+    sr_nat_handle_icmp(sr, packet, len, iface);
+  } else {
+    fprintf(stderr, "handle tcp ->");
+    sr_nat_handle_tcp(sr, packet, len, iface);
   }
 }
 
 void send_icmp_echo_reply(struct sr_instance* sr, uint8_t* recv_packet, uint32_t recv_len, char* iface_name) {
   sr_ethernet_hdr_t* recv_eth_hdr = (sr_ethernet_hdr_t* )recv_packet;
   sr_ip_hdr_t* recv_ip_hdr = (sr_ip_hdr_t* )(recv_packet + sizeof(sr_ethernet_hdr_t));
+  sr_icmp_hdr_t* recv_icmp_hdr = (sr_icmp_hdr_t* )(recv_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
   uint32_t icmp_data_len = recv_len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t) - sizeof(sr_icmp_hdr_t);
   uint32_t send_len = recv_len;
@@ -258,6 +200,8 @@ void send_icmp_echo_reply(struct sr_instance* sr, uint8_t* recv_packet, uint32_t
   send_icmp_hdr->icmp_type = 0;
   send_icmp_hdr->icmp_code = 0;
   send_icmp_hdr->icmp_sum = 0;
+  send_icmp_hdr->icmp_id = recv_icmp_hdr->icmp_id;
+  send_icmp_hdr->icmp_seq = recv_icmp_hdr->icmp_seq;
 
   if (icmp_data_len > 0) {
     uint8_t* recv_icmp_data = recv_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_hdr_t);
@@ -469,39 +413,232 @@ int is_icmp_echo_request(struct sr_instance* sr, uint8_t* packet, uint32_t len) 
 
 
 /* Bonus for NAT */
-void sr_nat_handle_icmp(struct instance* sr, struct sr_nat* nat, uint8_t* packet, uint32_t len, char* iface) {
+
+/* Handle ICMP packet */
+void sr_nat_handle_icmp(struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
   sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-  struct sr_if* iface_ext_info = sr_get_interface(sr, "sw0-eth2");
-  struct sr_if* iface_int_info = sr_get_interface(sr, "sw0-eth1");
+  struct sr_if* iface_ext_info = sr_get_interface(sr, "eth2");
+  struct sr_if* ifaces = sr->if_list;
   struct sr_nat_mapping* mapping = NULL;
-  if (strcmp(iface, "sw0-eth1") == 0) {
-    mapping = sr_nat_insert_mapping(nat, ip_hdr->ip_src, icmp_hdr->icmp_id, nat_mapping_icmp);
+  int is_if_rt = 0;
 
-    ip_hdr->ip_src = iface_ext_info->ip;
-    icmp_hdr->icmp_id = mapping->aux_ext;
+  /* From internal */
+  if (strcmp(iface, "eth1") == 0) {
+    fprintf(stderr, "from internal ethernet -> ");
+    while (ifaces) { /* For Router */
+      if (ifaces->ip == ip_hdr->ip_dst) {
+        fprintf(stderr, "to router\n");
+        is_if_rt = 1;
+        if (is_icmp_echo_request(sr, packet, len)) {
+          send_icmp_echo_reply(sr, packet, len, iface);
+        }
+      }
+      ifaces = ifaces->next;
+    }
+    
+    if (is_if_rt == 0) { /* Not for router */
+      fprintf(stderr, "next-hop through router\n");
+      mapping = sr_nat_insert_mapping(sr->nat, ip_hdr->ip_src, icmp_hdr->icmp_id, nat_mapping_icmp);
+      ip_hdr->ip_src = iface_ext_info->ip;
+      icmp_hdr->icmp_id = mapping->aux_ext;
 
-    ip_hdr->ip_sum = 0;
-    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
-    icmp_hdr->icmp_sum = 0;
-    icmp_hdr->icmp_sum = cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
-  } else {
-    mapping = sr_nat_lookup_external(nat, icmp_hdr->icmp_id, nat_mapping_icmp);
-    if (mapping) {
-      ip_hdr->ip_dst = mapping->ip_int;
-      icmp_hdr->icmp_id = mapping->aux_int;
-
+      ip_hdr->ip_ttl--;
       ip_hdr->ip_sum = 0;
       ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
       icmp_hdr->icmp_sum = 0;
       icmp_hdr->icmp_sum = cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
-    } else return; /* drop packet */
-  }
 
+      if (ip_hdr->ip_ttl <= 0) {
+        fprintf(stderr, "time exceeded\n");
+        send_icmp_error(sr, packet, len, iface, 11, 0);
+        return;
+      } else { 
+        if (sr_load_rt(sr, "rtable") != 0) return;
+        struct sr_rt* rt_entry = get_match_rt_entry(sr, ip_hdr->ip_dst);
+        if (!rt_entry) {
+          fprintf(stderr, "fail to find rtable\n");
+          send_icmp_error(sr, packet, len, iface, 3, 0);
+          return;
+        } else { 
+          fprintf(stderr, "success to find in rtable\n");
+          struct sr_arpentry* arp_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
+          if (arp_entry) { 
+            fprintf(stderr, "exist match ARP cache entry\n");
+            sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            memcpy(eth_hdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+            memcpy(eth_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
+            fprintf(stderr, "Send frame to next-hop\n");
+            sr_send_packet(sr, packet, len, iface_info->name);
+            free(arp_entry);
+          } else { 
+            fprintf(stderr, "don't exist match ARP cache entry\n");
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            struct sr_arpreq* req = sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, iface_info->name);
+            handle_arpreq(sr, req);
+          } 
+        }
+      }
+    }
+  } else { /* From external */
+    fprintf(stderr, "from external ethernet ->");
+    mapping = sr_nat_lookup_external(sr->nat, icmp_hdr->icmp_id, nat_mapping_icmp);
+    if (mapping) { 
+      fprintf(stderr, "next-hop through router\n");
+      ip_hdr->ip_dst = mapping->ip_int;
+      icmp_hdr->icmp_id = mapping->aux_int;
+
+      ip_hdr->ip_ttl--;
+      ip_hdr->ip_sum = 0;
+      ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+      icmp_hdr->icmp_sum = 0;
+      icmp_hdr->icmp_sum = cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
+
+      if (ip_hdr->ip_ttl <= 0) {
+        fprintf(stderr, "time exceeded\n");
+        send_icmp_error(sr, packet, len, iface, 11, 0);
+        return;
+      } else { 
+        if (sr_load_rt(sr, "rtable") != 0) return;
+        struct sr_rt* rt_entry = get_match_rt_entry(sr, ip_hdr->ip_dst);
+        if (!rt_entry) {
+          fprintf(stderr, "fail to find rtable\n");
+          send_icmp_error(sr, packet, len, iface, 3, 0);
+          return;
+        } else { 
+          fprintf(stderr, "success to find in rtable\n");
+          struct sr_arpentry* arp_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
+          if (arp_entry) { 
+            fprintf(stderr, "exist match ARP cache entry\n");
+            sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            memcpy(eth_hdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+            memcpy(eth_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
+            fprintf(stderr, "Send frame to next-hop\n");
+            sr_send_packet(sr, packet, len, iface_info->name);
+            free(arp_entry);
+          } else { 
+            fprintf(stderr, "don't exist match ARP cache entry\n");
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            struct sr_arpreq* req = sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, iface_info->name);
+            handle_arpreq(sr, req);
+          } 
+        }
+      }
+    } else {
+      fprintf(stderr, "to router\n");
+      return; /* drop packet */
+    }
+  }
 }
 
-void sr_nat_handle_tcp (struct instance* sr, struct sr_nat* nat, uint8_t* packet, uint32_t len, char* iface) {
+/* Handle TCP */
+void sr_nat_handle_tcp (struct sr_instance* sr, uint8_t* packet, uint32_t len, char* iface) {
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t));
-  
+  sr_tcp_hdr_t* tcp_hdr = (sr_tcp_hdr_t* )(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+  struct sr_if* iface_ext_info = sr_get_interface(sr, "sw0-eth2");
+  struct sr_if* ifaces = sr->if_list;
+  struct sr_nat_mapping* mapping = NULL;
+  int is_if_rt = 0;
 
+  /* From internal */
+  if (strcmp(iface, "sw0-eth1") == 0) {
+    while (ifaces) { /* For Router */
+      if (ifaces->ip == ip_hdr->ip_dst) {
+        is_if_rt = 1;
+        send_icmp_error(sr, packet, len, iface, 3, 3); 
+      }
+      ifaces = ifaces->next;
+    }
+    
+    if (is_if_rt == 0) { /* Not for router */
+      mapping = sr_nat_insert_mapping(sr->nat, ip_hdr->ip_src, tcp_hdr->source_port, nat_mapping_tcp);
+
+      ip_hdr->ip_src = iface_ext_info->ip;
+      tcp_hdr->source_port = mapping->aux_ext;
+
+      ip_hdr->ip_ttl--;
+      ip_hdr->ip_sum = 0;
+      ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+      tcp_hdr->checksum = 0;
+      tcp_hdr->checksum = cksum(tcp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
+
+      if (ip_hdr->ip_ttl <= 0) {
+        fprintf(stderr, "time exceeded\n");
+        send_icmp_error(sr, packet, len, iface, 11, 0);
+        return;
+      } else { 
+        if (sr_load_rt(sr, "rtable") != 0) return;
+        struct sr_rt* rt_entry = get_match_rt_entry(sr, ip_hdr->ip_dst);
+        if (!rt_entry) {
+          fprintf(stderr, "fail to find rtable\n");
+          send_icmp_error(sr, packet, len, iface, 3, 0);
+          return;
+        } else { 
+          fprintf(stderr, "success to find in rtable\n");
+          struct sr_arpentry* arp_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
+          if (arp_entry) { 
+            fprintf(stderr, "exist match ARP cache entry\n");
+            sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            memcpy(eth_hdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+            memcpy(eth_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
+            fprintf(stderr, "Send frame to next-hop\n");
+            sr_send_packet(sr, packet, len, iface_info->name);
+            free(arp_entry);
+          } else { 
+            fprintf(stderr, "don't exist match ARP cache entry\n");
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            struct sr_arpreq* req = sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, iface_info->name);
+            handle_arpreq(sr, req);
+          } 
+        }
+      }
+    }
+  } else { /* From external */
+    mapping = sr_nat_lookup_external(sr->nat, tcp_hdr->dest_port, nat_mapping_icmp);
+    if (mapping) { 
+      ip_hdr->ip_dst = mapping->ip_int;
+      tcp_hdr->dest_port = mapping->aux_int;
+
+      ip_hdr->ip_ttl--;
+      ip_hdr->ip_sum = 0;
+      ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+      tcp_hdr->checksum = 0;
+      tcp_hdr->checksum = cksum(tcp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t));
+
+      if (ip_hdr->ip_ttl <= 0) {
+        fprintf(stderr, "time exceeded\n");
+        send_icmp_error(sr, packet, len, iface, 11, 0);
+        return;
+      } else { 
+        if (sr_load_rt(sr, "rtable") != 0) return;
+        struct sr_rt* rt_entry = get_match_rt_entry(sr, ip_hdr->ip_dst);
+        if (!rt_entry) {
+          fprintf(stderr, "fail to find rtable\n");
+          send_icmp_error(sr, packet, len, iface, 3, 0);
+          return;
+        } else { 
+          fprintf(stderr, "success to find in rtable\n");
+          struct sr_arpentry* arp_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
+          if (arp_entry) { 
+            fprintf(stderr, "exist match ARP cache entry\n");
+            sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            memcpy(eth_hdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+            memcpy(eth_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
+            fprintf(stderr, "Send frame to next-hop\n");
+            sr_send_packet(sr, packet, len, iface_info->name);
+            free(arp_entry);
+          } else { 
+            fprintf(stderr, "don't exist match ARP cache entry\n");
+            struct sr_if* iface_info = sr_get_interface(sr, rt_entry->interface);
+            struct sr_arpreq* req = sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, iface_info->name);
+            handle_arpreq(sr, req);
+          } 
+        }
+      }
+    } else return; /* drop packet */
+  }
 }

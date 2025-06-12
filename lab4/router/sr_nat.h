@@ -42,6 +42,7 @@ struct sr_nat_mapping {
 struct sr_nat {
   /* add any fields here */
   struct sr_nat_mapping *mappings;
+  int nat_enabled;
   uint16_t id_incre;
   uint16_t port_incre;
   int icmp_timeout;
@@ -55,7 +56,7 @@ struct sr_nat {
 };
 
 
-int   sr_nat_init(struct sr_instance* sr, struct sr_nat *nat);     /* Initializes the nat */
+int   sr_nat_init(struct sr_nat *nat);     /* Initializes the nat */
 int   sr_nat_destroy(struct sr_nat *nat);  /* Destroys the nat (free memory) */
 void *sr_nat_timeout(void *nat_ptr);  /* Periodic Timout */
 
