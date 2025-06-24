@@ -448,7 +448,7 @@ void sr_nat_handle_icmp(struct sr_instance* sr, uint8_t* packet, uint32_t len, c
       
       mapping = sr_nat_insert_mapping(sr->nat, ip_hdr->ip_src, icmp_hdr->icmp_id, nat_mapping_icmp);
       ip_hdr->ip_src = iface_ext_info->ip;
-      icmp_hdr->icmp_id = htons(mapping->aux_ext);
+      icmp_hdr->icmp_id = mapping->aux_ext;
 
 
       ip_hdr->ip_ttl--;
@@ -496,7 +496,7 @@ void sr_nat_handle_icmp(struct sr_instance* sr, uint8_t* packet, uint32_t len, c
     if (mapping) { 
       fprintf(stderr, "to inside network\n");
       ip_hdr->ip_dst = mapping->ip_int;
-      icmp_hdr->icmp_id = htons(mapping->aux_int);
+      icmp_hdr->icmp_id = mapping->aux_int;
 
       ip_hdr->ip_ttl--;
       ip_hdr->ip_sum = 0;
@@ -553,7 +553,7 @@ void sr_nat_handle_icmp(struct sr_instance* sr, uint8_t* packet, uint32_t len, c
             mapping = sr_nat_lookup_external(sr->nat, icmp_hdr->icmp_id, nat_mapping_icmp);
             if (mapping) { 
               ip_hdr->ip_dst = mapping->ip_int;
-              icmp_hdr->icmp_id = htons(mapping->aux_int);
+              icmp_hdr->icmp_id = mapping->aux_int;
         
               ip_hdr->ip_ttl--;
               ip_hdr->ip_sum = 0;
@@ -827,7 +827,6 @@ void sr_nat_handle_tcp(struct sr_instance* sr, uint8_t* packet, uint32_t len, ch
           if (strcmp(rt_entry->interface, "eth1") == 0) {
             fprintf(stderr, "to inside network (potential unsolicited incoming NAT traffic without specific mapping. This often implies a security risk or misconfiguration for NAT!)\n");
             mapping = sr_nat_lookup_external(sr->nat, ntohs(tcp_hdr->tcp_src), nat_mapping_tcp);
-            fprintf(stderr, "\npass (unusual flow for typical NAT, check logic carefully)\n");
 
             if (mapping) { 
               ip_hdr->ip_dst = mapping->ip_int;
