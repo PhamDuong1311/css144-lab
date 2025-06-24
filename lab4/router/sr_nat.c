@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <arpa/inet.h>
 
+#include "sr_utils.h"
+
 int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   assert(nat);
@@ -96,8 +98,8 @@ struct sr_nat_mapping *sr_nat_lookup_external(struct sr_nat *nat,
   /* handle lookup here, malloc and assign to copy */
   struct sr_nat_mapping *copy = NULL;
   struct sr_nat_mapping *nat_entry = nat->mappings;
+  
   while (nat_entry) {
-    
     if (nat_entry->aux_ext == aux_ext && nat_entry->type == type) {
       copy = (struct sr_nat_mapping* )malloc(sizeof(struct sr_nat_mapping));
       if (!copy) {
@@ -195,7 +197,7 @@ struct sr_nat_connection* sr_nat_insert_connection(struct sr_nat_mapping* mappin
   if (conn) {
     conn->last_active = time(NULL);
   } else {
-    struct sr_nat_connection* conn = (struct sr_nat_connection* )malloc(sizeof(struct sr_nat_connection));
+    conn = (struct sr_nat_connection* )malloc(sizeof(struct sr_nat_connection));
     if (!conn) return NULL;
 
     conn->ip_src = ip_src;
@@ -228,4 +230,3 @@ struct sr_nat_connection* sr_nat_lookup_connection(struct sr_nat_mapping* mappin
 
   return NULL;
 }
-
