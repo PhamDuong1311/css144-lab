@@ -6,6 +6,7 @@
 #include <stdlib.h> 
 #include <string.h> 
 #include <stdio.h>
+#include <arpa/inet.h>
 
 int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
@@ -96,7 +97,8 @@ struct sr_nat_mapping *sr_nat_lookup_external(struct sr_nat *nat,
   struct sr_nat_mapping *copy = NULL;
   struct sr_nat_mapping *nat_entry = nat->mappings;
   while (nat_entry) {
-    if (nat_entry->aux_int == aux_ext && nat_entry->type == type) {
+    
+    if (nat_entry->aux_ext == aux_ext && nat_entry->type == type) {
       copy = (struct sr_nat_mapping* )malloc(sizeof(struct sr_nat_mapping));
       if (!copy) {
         pthread_mutex_destroy(&(nat->lock));

@@ -189,29 +189,36 @@ typedef struct sr_arp_hdr sr_arp_hdr_t;
 
 /* Bonus NAT */
 struct sr_tcp_hdr {
-    uint16_t source_port;       
-    uint16_t dest_port;         
-    uint32_t sequence_number;   
-    uint32_t acknowledgement_number; 
+  uint16_t tcp_src;           /* source port */
+  uint16_t tcp_dst;           /* destination port */
+  uint32_t tcp_seq;           /* sequence number */
+  uint32_t tcp_ack;           /* acknowledgement number */
+  
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+  uint8_t  tcp_off : 4;       /* data offset */
+  uint8_t  tcp_x2  : 4;       /* (unused) */
+#elif __BYTE_ORDER == __BIG_ENDIAN
+  uint8_t  tcp_x2  : 4;       /* (unused) */
+  uint8_t  tcp_off : 4;       /* data offset */
+#endif
+  
+  uint8_t  tcp_flags;         /* control flags */
+#define TCP_FIN  0x01
+#define TCP_SYN  0x02
+#define TCP_RST  0x04
+#define TCP_PSH  0x08
+#define TCP_ACK  0x10
+#define TCP_URG  0x20
+#define TCP_ECE  0x40
+#define TCP_CWR  0x80
 
-    uint8_t  ns      : 1;
-    uint8_t  reserved: 3;
-    uint8_t  data_offset : 4;
-
-    uint8_t  fin     : 1;
-    uint8_t  syn     : 1;
-    uint8_t  rst     : 1;
-    uint8_t  psh     : 1;
-    uint8_t  ack     : 1;
-    uint8_t  urg     : 1;
-    uint8_t  ece     : 1;
-    uint8_t  cwr     : 1;
-
-    uint16_t window_size;       
-    uint16_t checksum;          
-    uint16_t urgent_pointer;   
-} __attribute__ ((packed)) ;
+  uint16_t tcp_win;           /* window size */
+  uint16_t tcp_sum;           /* checksum */
+  uint16_t tcp_urp;           /* urgent pointer */
+} __attribute__ ((packed));
 typedef struct sr_tcp_hdr sr_tcp_hdr_t;
+
+
 
 #define sr_IFACE_NAMELEN 32
 
