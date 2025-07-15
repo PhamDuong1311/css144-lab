@@ -47,7 +47,11 @@ Vì đây là static router nên routing table đã được cấu hình trướ
 ## 4. Sequence diagram
 Tại SR, nó sẽ phải xử lý những Ethernet frame nhận được, cụ thể đó là những gói tin ARP và IP (ICMP/TCP), dưới đây là 2 luồng hoạt động căn bản xử lý giữa các Host:
 
+### Luồng hoạt động cho ARP
+
 ![seq_arp](image_lab34/sequence_arp.drawio.png)
+
+### Luồng hoạt động cho ICMP/TCP
 
 ![seq_icmp](image_lab34/sequence_icmp.drawio.png)
 
@@ -67,9 +71,19 @@ Dưới đây à flowchart của SR được handle xử lý 3 luồng:
 - ARP_cache thread: Xử lý timeout trong ARP cache và retry time cho các ARP request trong queue khi chưa nhận được ARP reply.
 - NAT_table thread: Xử lý timeout trong NAT table cho ICMP và TCP.
 
+### Main code
 ![sr](image_lab34/sr.drawio.png)
+
+### Deploy tại main thread xử lý ICMP nhận được
 
 ![icmp](image_lab34/icmp.drawio.png)
 
+### Deploy tại main thread xử lý TCP nhận được
+
 ![tcp](image_lab34/tcp.drawio.png)
+
+### Dưới đây là các hàm deploy trong lab3-4:
+
+![function](image_lab34/function.drawio.png)
+
 
