@@ -13,8 +13,8 @@ Table of Contents
 Mục tiêu của Lab3-4 là xây dựng 1 simple router (SR) được cấu hình với 1 static routing table. SR sẽ nhận những raw eth frame và forwarding chúng tới nơi khác thông qua các NIC của SR.
 
 Những giao thức cần triển khai như: Ethernet, IP, ARP, ICMP, TCP, NAT. Được triển khai cụ thể như sau:
-    - Lab 3: Xử lý những eth frame nhận được, thực hiện forwarding theo routing table, xử lý ARP và sinh các thông báo ICMP phù hợp.
-    - Lab 4: Mở rộng ở Lab 3 thêm cơ chế NAT có khả năng chuyển đổi (IP, port) cho các gói ICMP và TCP, đảm bảo các kết nối giữa mạng LAN và Internet.
+- Lab 3: Xử lý những eth frame nhận được, thực hiện forwarding theo routing table, xử lý ARP và sinh các thông báo ICMP phù hợp.
+- Lab 4: Mở rộng ở Lab 3 thêm cơ chế NAT có khả năng chuyển đổi (IP, port) cho các gói ICMP và TCP, đảm bảo các kết nối giữa mạng LAN và Internet.
 
 ## 2. Implementation
 Dưới đây là mục tiêu cụ thể được deploy tổng hợp của cả 2 Lab:
